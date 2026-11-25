@@ -1,0 +1,265 @@
+{
+  "entities": {
+    "Position": {
+      "title": "Position",
+      "description": "An active or closed stock investment position tracked by the user with personalized risk management bounds.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase user UID owning this position."
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Stock ticker symbol (e.g. NVDA, AAPL, RELIANCE.NS)."
+        },
+        "exchange": {
+          "type": "string",
+          "description": "Exchange identifier (e.g. NASDAQ, NYSE)."
+        },
+        "companyName": {
+          "type": "string",
+          "description": "Display company name."
+        },
+        "shares": {
+          "type": "number",
+          "description": "Number of shares held (must be positive)."
+        },
+        "avgEntryPrice": {
+          "type": "number",
+          "description": "Average cost basis per share."
+        },
+        "stopLossPrice": {
+          "type": "number",
+          "description": "Stop-loss trigger price (0 if unset)."
+        },
+        "takeProfitPrice": {
+          "type": "number",
+          "description": "Take-profit target price (0 if unset)."
+        },
+        "maxRiskPercent": {
+          "type": "number",
+          "description": "Maximum portfolio capital risk percentage allocated to this position."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional trade thesis or entry notes."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "CLOSED"],
+          "description": "Lifecycle status of the position."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "symbol",
+        "exchange",
+        "companyName",
+        "shares",
+        "avgEntryPrice",
+        "stopLossPrice",
+        "takeProfitPrice",
+        "maxRiskPercent",
+        "notes",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WatchlistStock": {
+      "title": "WatchlistStock",
+      "description": "A stock selected by the user for real-time TradingView scanning, RL decision tracking, and AI trend monitoring.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase user UID."
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Stock ticker symbol."
+        },
+        "exchange": {
+          "type": "string",
+          "description": "Stock exchange."
+        },
+        "companyName": {
+          "type": "string",
+          "description": "Company display name."
+        },
+        "sector": {
+          "type": "string",
+          "description": "Market sector label."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when added (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "symbol",
+        "exchange",
+        "companyName",
+        "sector",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "RiskAlertRule": {
+      "title": "RiskAlertRule",
+      "description": "Personalized risk management alert threshold configured by the user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase user UID."
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Target stock ticker symbol."
+        },
+        "alertType": {
+          "type": "string",
+          "enum": [
+            "STOP_LOSS",
+            "TAKE_PROFIT",
+            "RSI_OVERBOUGHT",
+            "RSI_OVERSOLD",
+            "DRAWDOWN_LIMIT",
+            "SIGNAL_FLIP"
+          ],
+          "description": "Type of personalized risk management condition."
+        },
+        "thresholdValue": {
+          "type": "number",
+          "description": "Numeric trigger threshold (price, RSI value, or drawdown percentage)."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether this alert rule is actively evaluated."
+        },
+        "notes": {
+          "type": "string",
+          "description": "User note for this risk alert."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "symbol",
+        "alertType",
+        "thresholdValue",
+        "active",
+        "notes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "RiskProfile": {
+      "title": "RiskProfile",
+      "description": "User-level risk management parameters for position sizing and drawdown alerts.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase user UID."
+        },
+        "riskTolerance": {
+          "type": "string",
+          "enum": ["CONSERVATIVE", "MODERATE", "AGGRESSIVE"],
+          "description": "User risk tolerance profile."
+        },
+        "accountCapital": {
+          "type": "number",
+          "description": "Total trading capital in USD for position sizing calculations."
+        },
+        "defaultRiskPerTradePct": {
+          "type": "number",
+          "description": "Default risk per trade percentage."
+        },
+        "maxPortfolioDrawdownPct": {
+          "type": "number",
+          "description": "Maximum acceptable portfolio drawdown percentage."
+        },
+        "preferredTimeframe": {
+          "type": "string",
+          "enum": ["1D", "1W", "1M", "3M", "1Y"],
+          "description": "Preferred chart and indicator analysis horizon."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "riskTolerance",
+        "accountCapital",
+        "defaultRiskPerTradePct",
+        "maxPortfolioDrawdownPct",
+        "preferredTimeframe",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/positions/{positionId}": {
+      "schema": {
+        "$ref": "#/entities/Position"
+      },
+      "description": "User's active and closed stock investment positions."
+    },
+    "/users/{userId}/watchlist/{symbolId}": {
+      "schema": {
+        "$ref": "#/entities/WatchlistStock"
+      },
+      "description": "User's monitored and selectable watchlist tickers."
+    },
+    "/users/{userId}/riskAlerts/{alertId}": {
+      "schema": {
+        "$ref": "#/entities/RiskAlertRule"
+      },
+      "description": "User's personalized risk management alert rules."
+    },
+    "/users/{userId}/profile/{docId}": {
+      "schema": {
+        "$ref": "#/entities/RiskProfile"
+      },
+      "description": "User's portfolio risk management settings."
+    }
+  }
+}

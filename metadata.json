@@ -1,0 +1,6 @@
+{
+  "name": "TradePulse",
+  "description": "AI-powered stock trading guidance, technical indicator signals, predictive trend forecasting, sentiment analysis, and personalized portfolio risk management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

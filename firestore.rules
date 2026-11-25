@@ -1,0 +1,185 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidPosition(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 20 &&
+             data.exchange is string && data.exchange.size() <= 30 &&
+             data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 80 &&
+             data.shares is number && data.shares > 0 && data.shares <= 100000000 &&
+             data.avgEntryPrice is number && data.avgEntryPrice > 0 && data.avgEntryPrice <= 10000000 &&
+             data.stopLossPrice is number && data.stopLossPrice >= 0 && data.stopLossPrice <= 10000000 &&
+             data.takeProfitPrice is number && data.takeProfitPrice >= 0 && data.takeProfitPrice <= 10000000 &&
+             data.maxRiskPercent is number && data.maxRiskPercent >= 0.1 && data.maxRiskPercent <= 100 &&
+             data.notes is string && data.notes.size() <= 300 &&
+             data.status in ['ACTIVE', 'CLOSED'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidWatchlistStock(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 20 &&
+             data.exchange is string && data.exchange.size() <= 30 &&
+             data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 80 &&
+             data.sector is string && data.sector.size() <= 50 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidRiskAlertRule(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 20 &&
+             data.alertType in ['STOP_LOSS', 'TAKE_PROFIT', 'RSI_OVERBOUGHT', 'RSI_OVERSOLD', 'DRAWDOWN_LIMIT', 'SIGNAL_FLIP'] &&
+             data.thresholdValue is number && data.thresholdValue >= 0 && data.thresholdValue <= 10000000 &&
+             data.active is bool &&
+             data.notes is string && data.notes.size() <= 200 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidRiskProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.riskTolerance in ['CONSERVATIVE', 'MODERATE', 'AGGRESSIVE'] &&
+             data.accountCapital is number && data.accountCapital >= 100 && data.accountCapital <= 1000000000 &&
+             data.defaultRiskPerTradePct is number && data.defaultRiskPerTradePct >= 0.1 && data.defaultRiskPerTradePct <= 25 &&
+             data.maxPortfolioDrawdownPct is number && data.maxPortfolioDrawdownPct >= 1 && data.maxPortfolioDrawdownPct <= 80 &&
+             data.preferredTimeframe in ['1D', '1W', '1M', '3M', '1Y'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId} {
+      allow read, write: if false;
+
+      match /positions/{positionId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(positionId);
+        allow create: if isOwner(userId) &&
+                         isValidId(positionId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'symbol', 'exchange', 'companyName',
+                           'shares', 'avgEntryPrice', 'stopLossPrice', 'takeProfitPrice',
+                           'maxRiskPercent', 'notes', 'status', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'symbol', 'exchange', 'companyName',
+                           'shares', 'avgEntryPrice', 'stopLossPrice', 'takeProfitPrice',
+                           'maxRiskPercent', 'notes', 'status', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidPosition(incoming(), userId);
+        allow update: if isOwner(userId) &&
+                         isValidId(positionId) &&
+                         isValidPosition(incoming(), userId) &&
+                         existing().status != 'CLOSED' &&
+                         incoming().userId == existing().userId &&
+                         incoming().symbol == existing().symbol &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'shares', 'avgEntryPrice', 'stopLossPrice', 'takeProfitPrice',
+                           'maxRiskPercent', 'notes', 'status', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(positionId);
+      }
+
+      match /watchlist/{symbolId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(symbolId);
+        allow create: if isOwner(userId) &&
+                         isValidId(symbolId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'symbol', 'exchange', 'companyName', 'sector', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'symbol', 'exchange', 'companyName', 'sector', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidWatchlistStock(incoming(), userId);
+        allow update: if isOwner(userId) &&
+                         isValidId(symbolId) &&
+                         isValidWatchlistStock(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().symbol == existing().symbol &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'exchange', 'companyName', 'sector', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(symbolId);
+      }
+
+      match /riskAlerts/{alertId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(alertId);
+        allow create: if isOwner(userId) &&
+                         isValidId(alertId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'symbol', 'alertType', 'thresholdValue', 'active', 'notes', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'symbol', 'alertType', 'thresholdValue', 'active', 'notes', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidRiskAlertRule(incoming(), userId);
+        allow update: if isOwner(userId) &&
+                         isValidId(alertId) &&
+                         isValidRiskAlertRule(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().symbol == existing().symbol &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'alertType', 'thresholdValue', 'active', 'notes', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(alertId);
+      }
+
+      match /profile/{docId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(docId);
+        allow create: if isOwner(userId) &&
+                         docId == 'settings' &&
+                         incoming().keys().hasAll([
+                           'userId', 'riskTolerance', 'accountCapital', 'defaultRiskPerTradePct',
+                           'maxPortfolioDrawdownPct', 'preferredTimeframe', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'riskTolerance', 'accountCapital', 'defaultRiskPerTradePct',
+                           'maxPortfolioDrawdownPct', 'preferredTimeframe', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidRiskProfile(incoming(), userId);
+        allow update: if isOwner(userId) &&
+                         docId == 'settings' &&
+                         isValidRiskProfile(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'riskTolerance', 'accountCapital', 'defaultRiskPerTradePct',
+                           'maxPortfolioDrawdownPct', 'preferredTimeframe', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && docId == 'settings';
+      }
+    }
+  }
+}
