@@ -34,6 +34,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -44,6 +45,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +63,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.example.R
 import com.example.data.model.AlertSeverity
 import com.example.data.model.RiskTolerance
@@ -88,8 +92,6 @@ import com.example.ui.viewmodel.TradePulseViewModel
 import com.example.worker.AlertMonitorScheduler
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -110,6 +112,20 @@ fun RiskAlertsScreen(
     var monitorStatus by remember { mutableStateOf(RiskAlertNotifier.getMonitorStatus(context)) }
     var hasNotificationPermission by remember {
         mutableStateOf(RiskAlertNotifier.hasNotificationPermission(context))
+    }
+
+    val immediateWorkInfos by WorkManager.getInstance(context)
+        .getWorkInfosForUniqueWorkFlow(AlertMonitorScheduler.IMMEDIATE_WORK_NAME)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val isCheckingNow = immediateWorkInfos.any {
+        it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING
+    }
+
+    DisposableEffect(context) {
+        val unregister = RiskAlertNotifier.registerStatusListener(context) { updated ->
+            monitorStatus = updated
+        }
+        onDispose { unregister() }
     }
 
     val notificationPermLauncher = rememberLauncherForActivityResult(
@@ -286,23 +302,25 @@ fun RiskAlertsScreen(
                                     } else {
                                         AlertMonitorScheduler.runImmediateCheck(context, forceNotify = true)
                                         viewModel.refreshMarketData()
-                                        scope.launch {
-                                            RiskAlertNotifier.notifyTriggeredAlerts(
-                                                context = context,
-                                                alerts = triggeredAlerts,
-                                                forceNotify = true
-                                            )
-                                            delay(1500L)
-                                            monitorStatus = RiskAlertNotifier.getMonitorStatus(context)
-                                        }
                                     }
                                 },
+                                enabled = !isCheckingNow,
                                 border = BorderStroke(1.dp, AiCyan),
                                 modifier = Modifier.testTag("check_prices_now_button")
                             ) {
-                                Icon(Icons.Filled.Refresh, contentDescription = null, tint = AiCyan, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.size(4.dp))
-                                Text("Check Now", color = AiCyan)
+                                if (isCheckingNow) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        color = AiCyan,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.size(6.dp))
+                                    Text("Checking...", color = AiCyan)
+                                } else {
+                                    Icon(Icons.Filled.Refresh, contentDescription = null, tint = AiCyan, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.size(4.dp))
+                                    Text("Check Now", color = AiCyan)
+                                }
                             }
                         }
                     }

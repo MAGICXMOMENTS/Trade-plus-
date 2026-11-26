@@ -42,16 +42,27 @@ class TradingViewApiService(private val client: OkHttpClient) {
         "price_52_week_low"
     )
 
-    suspend fun fetchQuotes(symbols: List<String>): List<TradingViewQuote> = withContext(Dispatchers.IO) {
+    suspend fun fetchQuotes(
+        symbols: List<String>,
+        preferredExchanges: Map<String, String> = emptyMap()
+    ): List<TradingViewQuote> = withContext(Dispatchers.IO) {
         if (symbols.isEmpty()) return@withContext emptyList()
         val cleanSymbols = symbols.map {
             it.trim().uppercase().removeSuffix(".NS").removeSuffix(".BO")
         }.distinct()
+        val normExchanges = preferredExchanges.entries.associate { (k, v) ->
+            k.trim().uppercase().removeSuffix(".NS").removeSuffix(".BO") to v.trim().uppercase()
+        }
         val collected = linkedMapOf<String, TradingViewQuote>()
 
         for (region in listOf("america", "india", "global")) {
-            val remaining = cleanSymbols.filter { it !in collected.keys }
-            if (remaining.isEmpty()) break
+            val remaining = cleanSymbols.filter { sym ->
+                if (sym in collected.keys) return@filter false
+                val prefEx = normExchanges[sym].orEmpty()
+                val wantsIndia = prefEx == "NSE" || prefEx == "BSE"
+                !(region == "america" && wantsIndia)
+            }
+            if (remaining.isEmpty()) continue
 
             val payload = JSONObject().apply {
                 put("filter", JSONArray().apply {
@@ -88,8 +99,15 @@ class TradingViewApiService(private val client: OkHttpClient) {
                     val parsed = parseScannerResponse(body)
                     for (quote in parsed) {
                         val existing = collected[quote.symbol]
+                        val prefEx = normExchanges[quote.symbol.uppercase()].orEmpty()
+                        val matchesPref = prefEx.isNotBlank() && quote.exchange.equals(prefEx, ignoreCase = true)
+                        val existingMatchesPref = prefEx.isNotBlank() && existing?.exchange.equals(prefEx, ignoreCase = true)
                         val preferIndia = region == "india" && quote.exchange.equals("NSE", ignoreCase = true)
-                        if (existing == null || (preferIndia && !existing.exchange.equals("NASDAQ", true) && !existing.exchange.equals("NYSE", true)) || quote.marketCap > existing.marketCap) {
+                        if (existing == null ||
+                            (matchesPref && !existingMatchesPref) ||
+                            (!existingMatchesPref && preferIndia && !existing.exchange.equals("NASDAQ", true) && !existing.exchange.equals("NYSE", true)) ||
+                            (!existingMatchesPref && !matchesPref && quote.marketCap > existing.marketCap)
+                        ) {
                             collected[quote.symbol] = quote
                         }
                     }

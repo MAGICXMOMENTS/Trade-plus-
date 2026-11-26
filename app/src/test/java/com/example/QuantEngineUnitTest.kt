@@ -155,6 +155,17 @@ class QuantEngineUnitTest {
         assertTrue(triggered.any { it.symbol == "NVDA" && it.title.contains("RSI Overbought") })
         val relianceTp = triggered.firstOrNull { it.symbol == "RELIANCE" && it.id == "rule_r2" }
         assertTrue(relianceTp != null && relianceTp.title.contains("₹"))
+
+        val zeroQuotes = mapOf(
+            "NVDA" to sampleQuote("NVDA", "NASDAQ", price = 0.0, tvRecommendAll = -0.5, tvRsi = 80.0)
+        )
+        val zeroTriggered = com.example.quant.RiskAlertEvaluator.evaluate(
+            positions = positions,
+            rules = rules,
+            quotes = zeroQuotes,
+            profile = com.example.data.model.RiskProfile()
+        )
+        assertTrue(zeroTriggered.isEmpty())
     }
 }
 

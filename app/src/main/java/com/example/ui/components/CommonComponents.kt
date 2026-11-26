@@ -509,7 +509,9 @@ fun AddRiskAlertDialog(
                                         AlertType.RSI_OVERSOLD -> "30.0"
                                         AlertType.DRAWDOWN_LIMIT -> "8.0"
                                         AlertType.SIGNAL_FLIP -> "0.0"
-                                        AlertType.STOP_LOSS -> prefillPrice?.let { fmtInput(it * 0.94) } ?: "100.0"
+                                        AlertType.STOP_LOSS -> prefillStopLoss?.let { fmtInput(it) }
+                                            ?: prefillPrice?.let { fmtInput(it * 0.94) }
+                                            ?: "100.0"
                                         AlertType.TAKE_PROFIT -> prefillPrice?.let { fmtInput(it * 1.12) } ?: "150.0"
                                     }
                                     expanded = false

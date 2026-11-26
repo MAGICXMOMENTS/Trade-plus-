@@ -131,17 +131,23 @@ class TradePulseViewModel(
                 _marketQuotesState.value = UiState.Loading
             }
             try {
-                val posSymbols = (positionsState.value as? UiState.Success)?.data?.map { it.symbol }.orEmpty()
-                val watchSymbols = (watchlistState.value as? UiState.Success)?.data?.map { it.symbol }.orEmpty()
+                val posList = (positionsState.value as? UiState.Success)?.data.orEmpty()
+                val watchList = (watchlistState.value as? UiState.Success)?.data.orEmpty()
+                val posSymbols = posList.map { it.symbol }
+                val watchSymbols = watchList.map { it.symbol }
                 val ruleSymbols = (riskAlertsState.value as? UiState.Success)?.data?.map { it.symbol }.orEmpty()
                 val extra = (posSymbols + watchSymbols + ruleSymbols).distinct()
+                val preferredExchanges = buildMap {
+                    watchList.forEach { if (it.exchange.isNotBlank()) put(it.symbol.uppercase(), it.exchange) }
+                    posList.forEach { if (it.exchange.isNotBlank()) put(it.symbol.uppercase(), it.exchange) }
+                }
 
                 val overview = marketRepo.getMarketOverviewQuotes(extra)
                 val map = overview.associateBy { it.symbol.uppercase() }.toMutableMap()
 
                 val missing = extra.filter { it.uppercase() !in map }
                 if (missing.isNotEmpty()) {
-                    map.putAll(marketRepo.getQuotesForSymbols(missing))
+                    map.putAll(marketRepo.getQuotesForSymbols(missing, preferredExchanges))
                 }
 
                 _liveQuoteMap.value = map

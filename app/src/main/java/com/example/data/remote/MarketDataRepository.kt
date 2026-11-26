@@ -105,13 +105,16 @@ class MarketDataRepository {
             combined
         }
 
-    suspend fun getQuotesForSymbols(symbols: List<String>): Map<String, TradingViewQuote> =
+    suspend fun getQuotesForSymbols(
+        symbols: List<String>,
+        preferredExchanges: Map<String, String> = emptyMap()
+    ): Map<String, TradingViewQuote> =
         withContext(Dispatchers.IO) {
             val clean = symbols.map { it.trim().uppercase() }.filter { it.isNotBlank() }.distinct()
             if (clean.isEmpty()) return@withContext emptyMap()
 
             val tvQuotes = try {
-                tradingViewApi.fetchQuotes(clean)
+                tradingViewApi.fetchQuotes(clean, preferredExchanges)
             } catch (e: Exception) {
                 Log.w(TAG, "TradingView batch quote error: ${e.message}")
                 emptyList()
@@ -125,13 +128,14 @@ class MarketDataRepository {
 
             for (sym in clean) {
                 val baseKey = sym.removeSuffix(".NS").removeSuffix(".BO")
+                val prefEx = preferredExchanges[sym].orEmpty().ifBlank { preferredExchanges[baseKey].orEmpty() }
                 if (sym !in resultMap && baseKey !in resultMap) {
                     val cached = quoteCache[sym] ?: quoteCache[baseKey]
                     if (cached != null && System.currentTimeMillis() - cached.fetchedAtMs < 60_000L) {
                         resultMap[sym] = cached
                     } else {
                         try {
-                            val chart = yahooApi.fetchHistoricalChart(sym, "", ChartTimeframe.M1)
+                            val chart = yahooApi.fetchHistoricalChart(sym, prefEx, ChartTimeframe.M1)
                             val q = yahooApi.fallbackQuoteFromChart(chart)
                             resultMap[sym] = q
                             quoteCache[sym] = q

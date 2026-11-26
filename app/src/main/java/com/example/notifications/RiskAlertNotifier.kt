@@ -51,11 +51,15 @@ object RiskAlertNotifier {
     }
 
     fun hasNotificationPermission(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
-        return ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.POST_NOTIFICATIONS
-        ) == PackageManager.PERMISSION_GRANTED
+        val osAllowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+        return osAllowed && NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 
     fun isBackgroundMonitoringEnabled(context: Context): Boolean {
@@ -77,6 +81,20 @@ object RiskAlertNotifier {
             lastCheckTimestampMs = prefs.getLong(KEY_LAST_CHECK_MS, 0L),
             lastCheckSummary = prefs.getString(KEY_LAST_SUMMARY, "Waiting for first price scan") ?: "Waiting for first price scan"
         )
+    }
+
+    fun registerStatusListener(
+        context: Context,
+        onStatusChanged: (MonitorStatusSnapshot) -> Unit
+    ): () -> Unit {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_BG_ENABLED || key == KEY_LAST_CHECK_MS || key == KEY_LAST_SUMMARY) {
+                onStatusChanged(getMonitorStatus(context))
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        return { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
     fun recordCheckStatus(context: Context, summary: String) {

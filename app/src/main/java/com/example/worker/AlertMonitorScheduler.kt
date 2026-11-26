@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 object AlertMonitorScheduler {
 
     private const val PERIODIC_WORK_NAME = "tradepulse_periodic_price_alert_check"
-    private const val IMMEDIATE_WORK_NAME = "tradepulse_immediate_price_alert_check"
+    const val IMMEDIATE_WORK_NAME = "tradepulse_immediate_price_alert_check"
 
     fun ensureScheduledIfEnabled(context: Context) {
         RiskAlertNotifier.ensureChannel(context)

@@ -9,12 +9,15 @@ import com.example.data.model.Position
 import com.example.data.model.PositionStatus
 import com.example.data.model.RiskAlertRule
 import com.example.data.model.RiskProfile
+import com.example.data.model.WatchlistStock
 import com.example.data.remote.MarketDataRepository
 import com.example.notifications.RiskAlertNotifier
 import com.example.quant.RiskAlertEvaluator
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.tasks.await
 import java.io.IOException
@@ -25,6 +28,10 @@ class PriceAlertCheckWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        if (FirebaseApp.getApps(applicationContext).isEmpty()) {
+            FirebaseApp.initializeApp(applicationContext)
+        }
+
         val forceNotify = inputData.getBoolean(KEY_FORCE_NOTIFY, false)
         val user = Firebase.auth.currentUser
         if (user == null) {
@@ -39,19 +46,23 @@ class PriceAlertCheckWorker(
 
             val positionsSnap = db.collection("users").document(uid).collection("positions").get().await()
             val rulesSnap = db.collection("users").document(uid).collection("riskAlerts").get().await()
+            val watchlistSnap = db.collection("users").document(uid).collection("watchlist").get().await()
             val profileSnap = db.collection("users").document(uid).collection("profile").document("settings").get().await()
 
             val positions = positionsSnap.toObjects(Position::class.java)
             val rules = rulesSnap.toObjects(RiskAlertRule::class.java)
+            val watchlist = watchlistSnap.toObjects(WatchlistStock::class.java)
             val profile = if (profileSnap.exists()) {
                 profileSnap.toObject(RiskProfile::class.java) ?: RiskProfile(userId = uid)
             } else {
                 RiskProfile(userId = uid)
             }
 
+            val activePositions = positions.filter { it.statusEnum() == PositionStatus.ACTIVE }
+            val activeRules = rules.filter { it.active }
             val monitoredSymbols = (
-                positions.filter { it.statusEnum() == PositionStatus.ACTIVE }.map { it.symbol } +
-                    rules.filter { it.active }.map { it.symbol }
+                activePositions.map { it.symbol } +
+                    activeRules.map { it.symbol }
                 )
                 .map { it.trim().uppercase() }
                 .filter { it.isNotBlank() }
@@ -62,7 +73,12 @@ class PriceAlertCheckWorker(
                 return Result.success()
             }
 
-            val quotes = MarketDataRepository().getQuotesForSymbols(monitoredSymbols)
+            val preferredExchanges = buildMap {
+                watchlist.forEach { if (it.exchange.isNotBlank()) put(it.symbol.uppercase(), it.exchange) }
+                activePositions.forEach { if (it.exchange.isNotBlank()) put(it.symbol.uppercase(), it.exchange) }
+            }
+
+            val quotes = MarketDataRepository().getQuotesForSymbols(monitoredSymbols, preferredExchanges)
             val triggered = RiskAlertEvaluator.evaluate(
                 positions = positions,
                 rules = rules,
@@ -89,6 +105,15 @@ class PriceAlertCheckWorker(
             Log.w(TAG, "Network error during background price check", e)
             RiskAlertNotifier.recordCheckStatus(applicationContext, "Network unavailable; will retry")
             if (runAttemptCount < 3) Result.retry() else Result.failure()
+        } catch (e: FirebaseFirestoreException) {
+            val isTransient = e.code == FirebaseFirestoreException.Code.UNAVAILABLE ||
+                e.code == FirebaseFirestoreException.Code.DEADLINE_EXCEEDED
+            Log.w(TAG, "Firestore error during background price check: ${e.code}", e)
+            RiskAlertNotifier.recordCheckStatus(
+                applicationContext,
+                if (isTransient) "Firestore temporarily unavailable; retrying" else "Check failed: ${e.localizedMessage}"
+            )
+            if (isTransient && runAttemptCount < 3) Result.retry() else Result.failure()
         } catch (e: Exception) {
             Log.e(TAG, "Background price alert check failed", e)
             RiskAlertNotifier.recordCheckStatus(

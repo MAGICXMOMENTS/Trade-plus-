@@ -27,8 +27,9 @@ object RiskAlertEvaluator {
 
         for (pos in activePositions) {
             val quote = quotes[pos.symbol.uppercase()] ?: continue
-            val curr = currencyFor(quote.exchange.ifBlank { pos.exchange }, pos.symbol)
             val livePrice = quote.price
+            if (livePrice <= 0.0) continue
+            val curr = currencyFor(quote.exchange.ifBlank { pos.exchange }, pos.symbol)
             val cost = pos.shares * pos.avgEntryPrice
             val value = pos.shares * livePrice
             totalCost += cost
@@ -103,6 +104,7 @@ object RiskAlertEvaluator {
         for (rule in rules) {
             if (!rule.active) continue
             val quote = quotes[rule.symbol.uppercase()] ?: continue
+            if (quote.price <= 0.0) continue
             val curr = currencyFor(quote.exchange, rule.symbol)
             val pos = activePositions.firstOrNull { it.symbol.equals(rule.symbol, ignoreCase = true) }
 
