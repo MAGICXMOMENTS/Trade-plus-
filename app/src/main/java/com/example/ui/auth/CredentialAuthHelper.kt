@@ -3,6 +3,8 @@ package com.example.ui.auth
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
@@ -22,6 +24,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
 
 private const val AUTH_TAG = "Auth"
 
@@ -29,6 +32,32 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
+}
+
+private fun getApkSigningSha1(context: Context): String? {
+    return try {
+        val pm = context.packageManager
+        val bytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val info = pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+            val signingInfo = info.signingInfo ?: return null
+            val signers = if (signingInfo.hasMultipleSigners()) {
+                signingInfo.apkContentsSigners
+            } else {
+                signingInfo.signingCertificateHistory
+            }
+            signers.firstOrNull()?.toByteArray()
+        } else {
+            @Suppress("DEPRECATION")
+            val info = pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES)
+            @Suppress("DEPRECATION")
+            info.signatures?.firstOrNull()?.toByteArray()
+        } ?: return null
+
+        val digest = MessageDigest.getInstance("SHA-1").digest(bytes)
+        digest.joinToString(":") { "%02X".format(it) }
+    } catch (_: Throwable) {
+        null
+    }
 }
 
 private fun readWebClientIdSafely(context: Context): String? {
@@ -145,10 +174,18 @@ fun onGoogleSignInClicked(
             throw e
         } catch (e: GetCredentialCancellationException) {
             Log.w(AUTH_TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-            onAuthCancelled(e.localizedMessage ?: e.message)
+            val sha1 = getApkSigningSha1(context)
+            val rawMsg = e.localizedMessage ?: e.message
+            val detail = listOfNotNull(
+                rawMsg?.takeIf { it.isNotBlank() },
+                sha1?.let { "APK SHA-1: $it" }
+            ).joinToString(" • ").ifBlank { null }
+            onAuthCancelled(detail)
         } catch (t: Throwable) {
             Log.e(AUTH_TAG, "Google Sign-In failed", t)
-            onAuthError(t.localizedMessage ?: "Sign in failed")
+            val sha1 = getApkSigningSha1(context)
+            val msg = t.localizedMessage ?: "Sign in failed"
+            onAuthError(if (sha1 != null) "$msg (APK SHA-1: $sha1)" else msg)
         }
     }
 }
