@@ -114,7 +114,7 @@ fun AiLabScreen(
                 ) {
                     Column {
                         Text(
-                            text = "Q-LEARNING, GEMINI FORECAST & PRO TOOLS",
+                            text = "Q-LEARNING, AI FORECAST & PRO TOOLS",
                             style = MaterialTheme.typography.labelMedium,
                             color = AiCyan
                         )
@@ -213,7 +213,7 @@ fun AiLabScreen(
                         )
                     }
 
-                    // Gemini Predictive Forecasting Section
+                    // AI Predictive Forecasting Section
                     item {
                         Button(
                             onClick = { viewModel.runAiForecast() },
@@ -236,7 +236,7 @@ fun AiLabScreen(
                             } else {
                                 Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.size(8.dp))
-                                Text("Run Gemini Predictive Forecast", fontWeight = FontWeight.Bold)
+                                Text("Run AI Predictive Forecast", fontWeight = FontWeight.Bold)
                             }
                         }
                     }

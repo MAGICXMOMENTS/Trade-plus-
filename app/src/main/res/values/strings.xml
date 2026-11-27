@@ -1,11 +1,10 @@
 <resources>
     <string name="app_name">TradePulse</string>
-    <string name="nav_dashboard">Portfolio</string>
     <string name="nav_markets">Markets</string>
     <string name="nav_ai_lab">AI &amp; RL</string>
     <string name="nav_alerts">Risk</string>
     <string name="sign_in_title">TradePulse Intelligence</string>
-    <string name="sign_in_subtitle">Real-time TradingView market telemetry, multi-indicator signals, Q-learning policy optimization, and Gemini predictive forecasting.</string>
+    <string name="sign_in_subtitle">Real-time TradingView market telemetry, multi-indicator signals, Q-learning policy optimization, and AI predictive forecasting.</string>
     <string name="sign_in_google">Sign in with Google</string>
     <string name="disclaimer_text">Market analytics, RL signals, and AI forecasts are for informational and educational research only and do not constitute financial advice.</string>
 </resources>

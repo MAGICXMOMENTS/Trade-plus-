@@ -199,7 +199,7 @@ class MarketDataRepository {
             chartCache[cacheKey] = now to it
         }
 
-        val analysisBars = if (chartPayload.bars.size < 60 && (timeframe == ChartTimeframe.D1 || timeframe == ChartTimeframe.W1)) {
+        val analysisBars = if (chartPayload.bars.size < 60 && timeframe.isIntraday) {
             val dailyKey = "${cleanSymbol}_${exchange}_1Y_AUX"
             val aux = chartCache[dailyKey]?.takeIf { now - it.first < 180_000L }?.second
                 ?: try {
@@ -217,9 +217,10 @@ class MarketDataRepository {
         val lookupSym = cleanSymbol.removeSuffix(".NS").removeSuffix(".BO")
         val targetEx = when {
             exchange.isNotBlank() -> exchange.trim().uppercase()
+            chartPayload.exchangeName.isNotBlank() -> chartPayload.exchangeName.trim().uppercase()
             cleanSymbol.endsWith(".NS") -> "NSE"
             cleanSymbol.endsWith(".BO") -> "BSE"
-            else -> ""
+            else -> quoteCache[cleanSymbol]?.exchange?.trim()?.uppercase().orEmpty()
         }
         val scopedCached = if (targetEx.isNotBlank()) {
             quoteCache["${lookupSym}_$targetEx"]
@@ -228,69 +229,99 @@ class MarketDataRepository {
             quoteCache[cleanSymbol] ?: quoteCache[lookupSym]
         }
 
-        val tvQuote = try {
+        val rawTvQuote = try {
             val prefMap = if (targetEx.isNotBlank()) mapOf(lookupSym to targetEx) else emptyMap()
             val fetched = tradingViewApi.fetchQuotes(listOf(lookupSym), prefMap)
             fetched.firstOrNull {
                 it.symbol.equals(lookupSym, ignoreCase = true) &&
                     (targetEx.isBlank() || it.exchange.equals(targetEx, ignoreCase = true))
             }
-                ?: fetched.firstOrNull { it.symbol.equals(lookupSym, ignoreCase = true) }
+                ?: fetched.firstOrNull {
+                    it.symbol.equals(lookupSym, ignoreCase = true) &&
+                        (targetEx.isBlank() || isIndianStock(it.exchange, it.symbol) == isIndianStock(targetEx, cleanSymbol))
+                }
                 ?: scopedCached
                 ?: yahooApi.fallbackQuoteFromChart(chartPayload)
         } catch (_: Exception) {
             scopedCached ?: yahooApi.fallbackQuoteFromChart(chartPayload)
-        }.also {
+        }
+
+        val chartRefPrice = chartPayload.regularMarketPrice.takeIf { it > 0.0 } ?: chartPayload.bars.last().close
+        val priceDivergence = if (chartRefPrice > 0.0 && rawTvQuote.price > 0.0) {
+            kotlin.math.abs(rawTvQuote.price - chartRefPrice) / chartRefPrice
+        } else 0.0
+        val tvQuote = (if (priceDivergence > 0.25) {
+            yahooApi.fallbackQuoteFromChart(chartPayload)
+        } else {
+            rawTvQuote
+        }).also {
             quoteCache[cleanSymbol] = it
             if (it.exchange.isNotBlank()) {
                 quoteCache["${lookupSym}_${it.exchange.uppercase()}"] = it
             }
         }
 
-        val curr = currencyFor(tvQuote.exchange.ifBlank { exchange }, cleanSymbol)
-        val chartTechnicals = TechnicalIndicatorEngine.analyze(cleanSymbol, chartPayload.bars, tvQuote, curr)
+        val curr = currencyFor(tvQuote.exchange.ifBlank { targetEx }, cleanSymbol)
+        val chartTechnicals = TechnicalIndicatorEngine.analyze(
+            symbol = cleanSymbol,
+            bars = chartPayload.bars,
+            tvQuote = tvQuote,
+            currencySymbol = curr,
+            isIntraday = timeframe.isIntraday
+        )
         val deepTechnicals = if (analysisBars !== chartPayload.bars) {
-            TechnicalIndicatorEngine.analyze(cleanSymbol, analysisBars, tvQuote, curr)
+            TechnicalIndicatorEngine.analyze(
+                symbol = cleanSymbol,
+                bars = analysisBars,
+                tvQuote = tvQuote,
+                currencySymbol = curr,
+                isIntraday = false
+            )
         } else {
             chartTechnicals
         }
 
-        val mergedTechnicals = chartTechnicals.copy(
-            rsi14 = deepTechnicals.rsi14,
-            macd = deepTechnicals.macd,
-            macdSignal = deepTechnicals.macdSignal,
-            macdHistogram = deepTechnicals.macdHistogram,
-            ema50 = deepTechnicals.ema50,
-            ema200 = deepTechnicals.ema200,
-            sma50 = deepTechnicals.sma50,
-            sma200 = deepTechnicals.sma200,
-            adx14 = deepTechnicals.adx14,
-            atr14 = deepTechnicals.atr14,
-            vwap = deepTechnicals.vwap,
-            supertrend = deepTechnicals.supertrend,
-            supertrendBullish = deepTechnicals.supertrendBullish,
-            mfi14 = deepTechnicals.mfi14,
-            cci20 = deepTechnicals.cci20,
-            williamsR14 = deepTechnicals.williamsR14,
-            obvTrendBullish = deepTechnicals.obvTrendBullish,
-            obvChangePct = deepTechnicals.obvChangePct,
-            pivotLevels = deepTechnicals.pivotLevels,
-            fibLevels = deepTechnicals.fibLevels,
-            entryZoneLow = deepTechnicals.entryZoneLow,
-            entryZoneHigh = deepTechnicals.entryZoneHigh,
-            stopLossLevel = deepTechnicals.stopLossLevel,
-            takeProfit1 = deepTechnicals.takeProfit1,
-            takeProfit2 = deepTechnicals.takeProfit2,
-            riskRewardRatio = deepTechnicals.riskRewardRatio,
-            compositeScore = deepTechnicals.compositeScore,
-            signalTier = deepTechnicals.signalTier,
-            breakdown = deepTechnicals.breakdown
-        )
+        val keepChartLevels = chartPayload.bars.size >= 15
+        val mergedTechnicals = if (deepTechnicals === chartTechnicals) {
+            chartTechnicals
+        } else {
+            chartTechnicals.copy(
+                rsi14 = if (keepChartLevels) chartTechnicals.rsi14 else deepTechnicals.rsi14,
+                macd = if (keepChartLevels) chartTechnicals.macd else deepTechnicals.macd,
+                macdSignal = if (keepChartLevels) chartTechnicals.macdSignal else deepTechnicals.macdSignal,
+                macdHistogram = if (keepChartLevels) chartTechnicals.macdHistogram else deepTechnicals.macdHistogram,
+                ema50 = deepTechnicals.ema50,
+                ema200 = deepTechnicals.ema200,
+                sma50 = deepTechnicals.sma50,
+                sma200 = deepTechnicals.sma200,
+                adx14 = deepTechnicals.adx14,
+                atr14 = if (keepChartLevels) chartTechnicals.atr14 else deepTechnicals.atr14,
+                vwap = chartTechnicals.vwap,
+                supertrend = chartTechnicals.supertrend,
+                supertrendBullish = chartTechnicals.supertrendBullish,
+                mfi14 = if (keepChartLevels) chartTechnicals.mfi14 else deepTechnicals.mfi14,
+                cci20 = if (keepChartLevels) chartTechnicals.cci20 else deepTechnicals.cci20,
+                williamsR14 = if (keepChartLevels) chartTechnicals.williamsR14 else deepTechnicals.williamsR14,
+                obvTrendBullish = deepTechnicals.obvTrendBullish,
+                obvChangePct = deepTechnicals.obvChangePct,
+                pivotLevels = deepTechnicals.pivotLevels,
+                fibLevels = chartTechnicals.fibLevels,
+                entryZoneLow = if (keepChartLevels) chartTechnicals.entryZoneLow else deepTechnicals.entryZoneLow,
+                entryZoneHigh = if (keepChartLevels) chartTechnicals.entryZoneHigh else deepTechnicals.entryZoneHigh,
+                stopLossLevel = if (keepChartLevels) chartTechnicals.stopLossLevel else deepTechnicals.stopLossLevel,
+                takeProfit1 = if (keepChartLevels) chartTechnicals.takeProfit1 else deepTechnicals.takeProfit1,
+                takeProfit2 = if (keepChartLevels) chartTechnicals.takeProfit2 else deepTechnicals.takeProfit2,
+                riskRewardRatio = if (keepChartLevels) chartTechnicals.riskRewardRatio else deepTechnicals.riskRewardRatio,
+                compositeScore = deepTechnicals.compositeScore,
+                signalTier = deepTechnicals.signalTier,
+                breakdown = deepTechnicals.breakdown
+            )
+        }
 
         val rlPolicy = RlTradingAgent.evaluatePolicy(
             symbol = cleanSymbol,
             bars = analysisBars,
-            analysis = mergedTechnicals
+            analysis = deepTechnicals
         )
 
         val prediction = PredictionEngine.predict(

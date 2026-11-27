@@ -20,7 +20,8 @@ object TechnicalIndicatorEngine {
         symbol: String,
         bars: List<OhlcvBar>,
         tvQuote: TradingViewQuote? = null,
-        currencySymbol: String = "$"
+        currencySymbol: String = "$",
+        isIntraday: Boolean = false
     ): TechnicalAnalysisResult {
         require(bars.isNotEmpty()) { "OHLCV bars required for technical analysis" }
 
@@ -44,7 +45,7 @@ object TechnicalIndicatorEngine {
         val (stochKSeries, stochDSeries) = stochasticSeries(bars, 14, 3)
         val adxSeries = adxSeries(bars, 14)
 
-        val vwapSeries = vwapSeries(bars)
+        val vwapSeries = vwapSeries(bars, isIntraday = isIntraday)
         val (supertrendSeries, supertrendBullSeries) = supertrendSeries(bars, 10, 3.0)
         val mfiSeries = mfiSeries(bars, 14)
         val cciSeries = cciSeries(bars, 20)
@@ -585,11 +586,29 @@ object TechnicalIndicatorEngine {
         return out
     }
 
-    fun vwapSeries(bars: List<OhlcvBar>, rollingWindow: Int = 20): List<Double?> {
+    fun vwapSeries(
+        bars: List<OhlcvBar>,
+        rollingWindow: Int = 20,
+        isIntraday: Boolean = false
+    ): List<Double?> {
         val out = MutableList<Double?>(bars.size) { null }
         if (bars.isEmpty()) return out
         var cumTpVol = 0.0
         var cumVol = 0.0
+        if (isIntraday) {
+            for (i in bars.indices) {
+                if (i > 0 && (bars[i].timestampSec - bars[i - 1].timestampSec) >= 10_800L) {
+                    cumTpVol = 0.0
+                    cumVol = 0.0
+                }
+                val tp = (bars[i].high + bars[i].low + bars[i].close) / 3.0
+                val v = bars[i].volume.toDouble().coerceAtLeast(1.0)
+                cumTpVol += tp * v
+                cumVol += v
+                out[i] = cumTpVol / cumVol.coerceAtLeast(1.0)
+            }
+            return out
+        }
         val tpVols = DoubleArray(bars.size)
         val vols = DoubleArray(bars.size)
         for (i in bars.indices) {

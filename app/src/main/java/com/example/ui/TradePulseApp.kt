@@ -21,13 +21,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.CandlestickChart
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.CandlestickChart
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Psychology
@@ -88,7 +86,6 @@ import com.example.worker.AlertMonitorScheduler
 import com.example.ui.auth.AuthScreen
 import com.example.ui.components.ErrorCard
 import com.example.ui.screens.AiLabScreen
-import com.example.ui.screens.PortfolioScreen
 import com.example.ui.screens.MarketsScreen
 import com.example.ui.screens.RiskAlertsScreen
 import com.example.ui.screens.StockDetailScreen
@@ -104,7 +101,6 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.TradePulseViewModel
 import com.google.firebase.auth.FirebaseAuth
 
-const val ROUTE_DASHBOARD = "dashboard"
 const val ROUTE_MARKETS = "markets"
 const val ROUTE_AI_LAB = "ai_lab"
 const val ROUTE_ALERTS = "alerts"
@@ -119,13 +115,6 @@ private data class NavTab(
 )
 
 private val topLevelTabs = listOf(
-    NavTab(
-        route = ROUTE_DASHBOARD,
-        labelRes = R.string.nav_dashboard,
-        selectedIcon = Icons.Filled.AccountBalanceWallet,
-        unselectedIcon = Icons.Outlined.AccountBalanceWallet,
-        testTag = "nav_dashboard"
-    ),
     NavTab(
         route = ROUTE_MARKETS,
         labelRes = R.string.nav_markets,
@@ -545,19 +534,8 @@ private fun AuthenticatedShell(
                 Box(modifier = Modifier.weight(1f).fillMaxSize()) {
                     NavHost(
                         navController = navController,
-                        startDestination = ROUTE_DASHBOARD
+                        startDestination = ROUTE_MARKETS
                     ) {
-                        composable(ROUTE_DASHBOARD) {
-                            PortfolioScreen(
-                                viewModel = viewModel,
-                                onOpenStock = { sym, exch ->
-                                    viewModel.selectStock(sym, exch)
-                                    navController.navigate(ROUTE_STOCK_DETAIL)
-                                },
-                                onOpenAlertsTab = { navigateToTab(ROUTE_ALERTS) },
-                                onOpenMarketsTab = { navigateToTab(ROUTE_MARKETS) }
-                            )
-                        }
                         composable(ROUTE_MARKETS) {
                             MarketsScreen(
                                 viewModel = viewModel,

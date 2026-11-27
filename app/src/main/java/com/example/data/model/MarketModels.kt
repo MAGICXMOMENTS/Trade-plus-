@@ -3,10 +3,13 @@ package com.example.data.model
 enum class ChartTimeframe(
     val label: String,
     val yahooRange: String,
-    val yahooInterval: String
+    val yahooInterval: String,
+    val isIntraday: Boolean = false
 ) {
-    D1("1D", "5d", "15m"),
-    W1("1W", "1mo", "1h"),
+    MIN15("15m", "5d", "15m", isIntraday = true),
+    H1("1h", "1mo", "1h", isIntraday = true),
+    D1("1D", "1d", "5m", isIntraday = true),
+    W1("1W", "5d", "30m", isIntraday = true),
     M1("1M", "1mo", "1d"),
     M3("3M", "3mo", "1d"),
     Y1("1Y", "1y", "1d"),

@@ -209,14 +209,21 @@ class TradePulseViewModel(
     fun selectStock(symbol: String, exchange: String = "", timeframe: ChartTimeframe = _selectedTimeframe.value) {
         val clean = symbol.trim().uppercase()
         if (clean.isBlank()) return
+        val resolvedExchange = exchange.ifBlank {
+            _liveQuoteMap.value[clean]?.exchange
+                ?: (_marketQuotesState.value as? UiState.Success)?.data
+                    ?.firstOrNull { it.symbol.equals(clean, ignoreCase = true) }
+                    ?.exchange
+                ?: ""
+        }
         val changedSymbol = clean != _selectedSymbol.value
         _selectedSymbol.value = clean
-        _selectedExchange.value = exchange
+        _selectedExchange.value = resolvedExchange
         _selectedTimeframe.value = timeframe
         if (changedSymbol) {
             _aiForecastState.value = UiState.Idle
         }
-        loadStockIntelligence(clean, exchange, timeframe)
+        loadStockIntelligence(clean, resolvedExchange, timeframe)
     }
 
     fun selectTimeframe(timeframe: ChartTimeframe) {
@@ -235,6 +242,9 @@ class TradePulseViewModel(
             _stockIntelligenceState.value = UiState.Loading
             try {
                 val bundle = marketRepo.loadStockIntelligence(symbol, exchange, timeframe, forceRefresh)
+                if (_selectedExchange.value.isBlank() && bundle.quote.exchange.isNotBlank()) {
+                    _selectedExchange.value = bundle.quote.exchange
+                }
                 _stockIntelligenceState.value = UiState.Success(bundle)
                 _liveQuoteMap.value = _liveQuoteMap.value.toMutableMap().apply {
                     put(bundle.quote.symbol.uppercase(), bundle.quote)

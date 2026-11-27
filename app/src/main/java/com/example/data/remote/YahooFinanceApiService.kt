@@ -26,9 +26,71 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
         exchange: String = "",
         timeframe: ChartTimeframe
     ): HistoricalChartPayload = withContext(Dispatchers.IO) {
-        val yahooSymbol = toYahooSymbol(symbol, exchange)
+        val primaryYahooSymbol = toYahooSymbol(symbol, exchange)
+        val candidates = buildList {
+            add(primaryYahooSymbol)
+            val clean = symbol.trim().uppercase()
+            if (exchange.isBlank() && !clean.contains('.')) {
+                val nse = "$clean.NS"
+                val bse = "$clean.BO"
+                if (nse != primaryYahooSymbol) add(nse)
+                if (bse != primaryYahooSymbol) add(bse)
+            }
+        }
+
+        var lastError: Exception? = null
+        for ((index, candidate) in candidates.withIndex()) {
+            try {
+                var payload = executeChartRequest(
+                    yahooSymbol = candidate,
+                    displaySymbol = symbol,
+                    exchange = exchange,
+                    timeframe = timeframe,
+                    rangeOverride = null
+                )
+                if (timeframe == ChartTimeframe.D1 && payload.bars.size < 6) {
+                    try {
+                        val twoDay = executeChartRequest(
+                            yahooSymbol = candidate,
+                            displaySymbol = symbol,
+                            exchange = exchange,
+                            timeframe = timeframe,
+                            rangeOverride = "2d"
+                        )
+                        if (twoDay.bars.size > payload.bars.size) {
+                            payload = twoDay.copy(bars = twoDay.bars.takeLast(78))
+                        }
+                    } catch (_: Exception) {
+                        // Keep initial D1 payload if 2d fallback fails
+                    }
+                }
+                return@withContext payload
+            } catch (e: Exception) {
+                lastError = e
+                val isLast = index == candidates.lastIndex
+                val msg = e.message.orEmpty()
+                val retryableNotFound = msg.contains("HTTP 404") ||
+                    msg.contains("No historical OHLCV data", ignoreCase = true) ||
+                    msg.contains("Historical bars empty", ignoreCase = true) ||
+                    msg.contains("No data found", ignoreCase = true)
+                if (isLast || !retryableNotFound) {
+                    throw e
+                }
+            }
+        }
+        throw lastError ?: IllegalStateException("Historical market data request failed for $symbol")
+    }
+
+    private fun executeChartRequest(
+        yahooSymbol: String,
+        displaySymbol: String,
+        exchange: String,
+        timeframe: ChartTimeframe,
+        rangeOverride: String? = null
+    ): HistoricalChartPayload {
         val encoded = URLEncoder.encode(yahooSymbol, "UTF-8")
-        val url = "https://query1.finance.yahoo.com/v8/finance/chart/$encoded?range=${timeframe.yahooRange}&interval=${timeframe.yahooInterval}&includePrePost=false"
+        val range = rangeOverride ?: timeframe.yahooRange
+        val url = "https://query1.finance.yahoo.com/v8/finance/chart/$encoded?range=$range&interval=${timeframe.yahooInterval}&includePrePost=false"
 
         val request = Request.Builder()
             .url(url)
@@ -37,7 +99,7 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
             .header("Accept", "application/json")
             .build()
 
-        client.newCall(request).execute().use { response ->
+        return client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 throw IllegalStateException("Historical market data request failed (HTTP ${response.code}) for $yahooSymbol")
             }
@@ -59,12 +121,18 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
             val meta = result.getJSONObject("meta")
             val regularPrice = meta.optDouble("regularMarketPrice", 0.0)
             val prevClose = meta.optDouble("chartPreviousClose", meta.optDouble("previousClose", regularPrice))
-            val longName = meta.optString("longName", meta.optString("shortName", symbol))
+            val longName = meta.optString("longName", meta.optString("shortName", displaySymbol))
             val rawExchange = meta.optString("exchangeName", exchange).trim()
             val exchangeName = when (rawExchange.uppercase()) {
                 "NSI" -> "NSE"
                 "BOM" -> "BSE"
-                else -> rawExchange.ifBlank { exchange }
+                else -> rawExchange.ifBlank {
+                    when {
+                        yahooSymbol.endsWith(".NS", ignoreCase = true) -> "NSE"
+                        yahooSymbol.endsWith(".BO", ignoreCase = true) -> "BSE"
+                        else -> exchange
+                    }
+                }
             }
 
             val timestamps = result.optJSONArray("timestamp")
@@ -78,7 +146,7 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
             val closes = quoteObj?.optJSONArray("close")
             val volumes = quoteObj?.optJSONArray("volume")
 
-            val bars = mutableListOf<OhlcvBar>()
+            val dedupedBars = LinkedHashMap<Long, OhlcvBar>()
             if (timestamps != null && opens != null && highs != null && lows != null && closes != null) {
                 for (i in 0 until timestamps.length()) {
                     if (closes.isNull(i) || opens.isNull(i) || highs.isNull(i) || lows.isNull(i)) continue
@@ -86,30 +154,34 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
                     val open = opens.optDouble(i)
                     val high = highs.optDouble(i)
                     val low = lows.optDouble(i)
-                    if (close.isNaN() || open.isNaN() || high.isNaN() || low.isNaN() || close <= 0.0) continue
-                    val vol = if (volumes != null && !volumes.isNull(i)) volumes.optLong(i, 0L) else 0L
-                    bars.add(
-                        OhlcvBar(
-                            timestampSec = timestamps.getLong(i),
-                            open = open,
-                            high = high,
-                            low = low,
-                            close = close,
-                            volume = vol
-                        )
+                    if (!close.isFinite() || !open.isFinite() || !high.isFinite() || !low.isFinite()) continue
+                    if (close <= 0.0 || open <= 0.0 || high <= 0.0 || low <= 0.0) continue
+                    val ts = timestamps.optLong(i, 0L)
+                    if (ts <= 0L) continue
+                    val vol = if (volumes != null && !volumes.isNull(i)) volumes.optLong(i, 0L).coerceAtLeast(0L) else 0L
+                    val validHigh = maxOf(high, open, close)
+                    val validLow = minOf(low, open, close)
+                    dedupedBars[ts] = OhlcvBar(
+                        timestampSec = ts,
+                        open = open,
+                        high = validHigh,
+                        low = validLow,
+                        close = close,
+                        volume = vol
                     )
                 }
             }
+            val bars = dedupedBars.values.sortedBy { it.timestampSec }
 
             if (bars.isEmpty()) {
                 throw IllegalStateException("Historical bars empty for $yahooSymbol")
             }
 
             HistoricalChartPayload(
-                symbol = symbol.uppercase(),
-                regularMarketPrice = if (regularPrice > 0.0) regularPrice else bars.last().close,
-                previousClose = if (prevClose > 0.0) prevClose else bars.first().open,
-                companyName = longName.ifBlank { symbol },
+                symbol = displaySymbol.uppercase(),
+                regularMarketPrice = if (regularPrice.isFinite() && regularPrice > 0.0) regularPrice else bars.last().close,
+                previousClose = if (prevClose.isFinite() && prevClose > 0.0) prevClose else bars.first().open,
+                companyName = longName.ifBlank { displaySymbol },
                 exchangeName = exchangeName,
                 bars = bars
             )
@@ -150,6 +222,15 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
     }
 
     companion object {
+        private val KNOWN_NSE_SYMBOLS = setOf(
+            "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "TATAMOTORS",
+            "BHARTIARTL", "ITC", "LT", "AXISBANK", "KOTAKBANK", "WIPRO", "MARUTI",
+            "SUNPHARMA", "TITAN", "BAJFINANCE", "ASIANPAINT", "ADANIENT", "NTPC",
+            "ONGC", "POWERGRID", "ULTRACEMCO", "HINDUNILVR", "HCLTECH", "TECHM",
+            "JSWSTEEL", "TATASTEEL", "BAJAJFINSV", "NESTLEIND", "DRREDDY", "COALINDIA",
+            "GRASIM", "INDUSINDBK", "CIPLA", "EICHERMOT", "APOLLOHOSP", "DIVISLAB", "BPCL"
+        )
+
         fun toYahooSymbol(symbol: String, exchange: String): String {
             val clean = symbol.trim().uppercase()
             val ex = exchange.trim().uppercase()
@@ -162,6 +243,7 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
                 ex == "TSX" -> "$clean.TO"
                 ex == "ASX" -> "$clean.AX"
                 ex == "XETR" || ex == "FWB" -> "$clean.DE"
+                ex.isBlank() && clean in KNOWN_NSE_SYMBOLS -> "$clean.NS"
                 else -> base
             }
         }

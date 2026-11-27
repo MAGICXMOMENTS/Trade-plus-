@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -45,10 +46,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
+import com.example.data.firebase.getAppCheckDebugToken
 import com.example.data.model.AlertType
 import com.example.data.model.Position
 import com.example.data.model.RlAction
@@ -209,6 +215,17 @@ fun ErrorCard(
     onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val isAppCheckError = remember(message) {
+        message.contains("App Check", ignoreCase = true) ||
+            message.contains("attestation", ignoreCase = true)
+    }
+    val debugToken = remember(message, isAppCheckError) {
+        if (BuildConfig.DEBUG && isAppCheckError) getAppCheckDebugToken(context) else null
+    }
+    var copiedToken by remember(debugToken) { mutableStateOf(false) }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = BearCoralDim.copy(alpha = 0.55f)),
         border = BorderStroke(1.dp, BearCoral.copy(alpha = 0.5f)),
@@ -233,19 +250,63 @@ fun ErrorCard(
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
-            if (onRetry != null) {
-                OutlinedButton(
-                    onClick = onRetry,
-                    border = BorderStroke(1.dp, BearCoral)
+            if (isAppCheckError && debugToken != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(ObsidianBg.copy(alpha = 0.7f))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Refresh,
-                        contentDescription = null,
-                        tint = BearCoral,
-                        modifier = Modifier.size(16.dp)
+                    Text(
+                        text = "Debug APK App Check Token (register in Firebase Console → App Check → Apps → Manage debug tokens):",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
                     )
-                    Spacer(modifier = Modifier.size(6.dp))
-                    Text("Retry", color = BearCoral)
+                    Text(
+                        text = debugToken,
+                        style = MonoNumericSmall,
+                        color = AiCyan
+                    )
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onRetry != null) {
+                    OutlinedButton(
+                        onClick = onRetry,
+                        border = BorderStroke(1.dp, BearCoral)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = null,
+                            tint = BearCoral,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
+                        Text("Retry", color = BearCoral)
+                    }
+                }
+                if (debugToken != null) {
+                    OutlinedButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(debugToken))
+                            copiedToken = true
+                        },
+                        border = BorderStroke(1.dp, AiCyan)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ContentCopy,
+                            contentDescription = null,
+                            tint = AiCyan,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
+                        Text(if (copiedToken) "Copied" else "Copy Debug Token", color = AiCyan)
+                    }
                 }
             }
         }

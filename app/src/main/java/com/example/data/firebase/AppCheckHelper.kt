@@ -36,9 +36,11 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                     "$DEBUG_STORE_PREFIX$persistenceKey",
                     Context.MODE_PRIVATE
                 )
+                // CRITICAL: MUST use commit() instead of apply() so the secret is written
+                // synchronously before DebugAppCheckProviderFactory reads it.
                 prefs.edit()
                     .putString(DEBUG_SECRET_KEY, debugToken)
-                    .apply()
+                    .commit()
                 Log.d(TAG, "App Check debug secret configured successfully.")
             } else {
                 Log.w(TAG, "No debug token found in Intent extra.")
@@ -70,5 +72,20 @@ fun configureAppCheck(context: Context, intent: Intent?) {
         }
     } catch (t: Throwable) {
         Log.e(TAG, "Failed to initialize Firebase App Check", t)
+    }
+}
+
+fun getAppCheckDebugToken(context: Context): String? {
+    if (!BuildConfig.DEBUG) return null
+    return try {
+        if (!ensureFirebaseAppInitialized(context)) return null
+        val persistenceKey = FirebaseApp.getInstance().persistenceKey
+        val prefs = context.getSharedPreferences(
+            "$DEBUG_STORE_PREFIX$persistenceKey",
+            Context.MODE_PRIVATE
+        )
+        prefs.getString(DEBUG_SECRET_KEY, null)?.takeIf { it.isNotBlank() }
+    } catch (_: Throwable) {
+        null
     }
 }

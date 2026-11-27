@@ -133,7 +133,7 @@ fun onGoogleSignInClicked(
     onAuthSuccess: () -> Unit,
     onAuthError: (String) -> Unit,
     scope: CoroutineScope,
-    onAuthCancelled: (String?) -> Unit = {}
+    onAuthCancelled: (detail: String?, apkSha1: String?) -> Unit = { _, _ -> }
 ) {
     val auth = safeFirebaseAuth()
     if (auth == null) {
@@ -176,11 +176,19 @@ fun onGoogleSignInClicked(
             Log.w(AUTH_TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
             val sha1 = getApkSigningSha1(context)
             val rawMsg = e.localizedMessage ?: e.message
+            if (rawMsg?.contains("16") == true || rawMsg?.contains("reauth", ignoreCase = true) == true) {
+                withContext(NonCancellable) {
+                    try {
+                        credentialManager.clearCredentialState(ClearCredentialStateRequest())
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
             val detail = listOfNotNull(
                 rawMsg?.takeIf { it.isNotBlank() },
                 sha1?.let { "APK SHA-1: $it" }
             ).joinToString(" • ").ifBlank { null }
-            onAuthCancelled(detail)
+            onAuthCancelled(detail, sha1)
         } catch (t: Throwable) {
             Log.e(AUTH_TAG, "Google Sign-In failed", t)
             val sha1 = getApkSigningSha1(context)

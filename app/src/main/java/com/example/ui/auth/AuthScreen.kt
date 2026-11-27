@@ -182,15 +182,15 @@ fun AuthScreen(
                 FeatureHighlightRow(
                     icon = Icons.Filled.Psychology,
                     tint = AiCyan,
-                    title = "Reinforcement Learning & Gemini Forecasting",
+                    title = "Reinforcement Learning & AI Forecasting",
                     subtitle = "Walk-forward Q-learning policy signals paired with structured AI long-term price action projections."
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 FeatureHighlightRow(
                     icon = Icons.Filled.Shield,
                     tint = RiskAmber,
-                    title = "Personalized Portfolio Risk Guardrails",
-                    subtitle = "Cloud-synced active positions, ATR stop-loss alerts, and drawdown protection thresholds."
+                    title = "Personalized Risk Guardrails",
+                    subtitle = "Cloud-synced price alerts, ATR stop-loss levels, and drawdown protection thresholds."
                 )
             }
 
@@ -230,12 +230,17 @@ fun AuthScreen(
                                 errorMessage = msg
                             },
                             scope = scope,
-                            onAuthCancelled = { detail ->
+                            onAuthCancelled = { detail, apkSha1 ->
                                 isLoading = false
-                                errorMessage = if (!detail.isNullOrBlank()) {
-                                    "Google Sign-In closed before completing ($detail). If this happens right after selecting an account, ensure the APK is signed with debug.keystore.base64 or its SHA-1 is registered in Firebase."
-                                } else {
-                                    "Google Sign-In was cancelled. If selecting an account closes without signing in, verify the APK signing SHA-1 matches Firebase."
+                                val registeredDebugSha1 = "FC:64:5C:A4:F6:22:08:2C:38:8C:E4:F7:E2:98:A5:0D:0C:27:7F:3F"
+                                val matchesRegisteredDebug = apkSha1.equals(registeredDebugSha1, ignoreCase = true)
+                                errorMessage = when {
+                                    detail.isNullOrBlank() ->
+                                        "Google Sign-In was cancelled."
+                                    matchesRegisteredDebug ->
+                                        "Google Sign-In failed ($detail). The APK SHA-1 matches debug.keystore.base64, so check: (1) add your selected Gmail under Test Users / publish the OAuth Consent Screen in Google Cloud (gen-lang-client-0624219085), (2) verify Google Sign-In is enabled in Firebase Auth with a support email, (3) uninstall & reinstall the app to clear cached Play Services state, or (4) re-confirm your Google account in Android Settings."
+                                    else ->
+                                        "Google Sign-In closed before completing ($detail). Ensure the APK is signed with debug.keystore.base64 or register this APK SHA-1 in Firebase Console."
                                 }
                             }
                         )

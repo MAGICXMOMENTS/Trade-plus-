@@ -23,7 +23,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddAlert
-import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -76,7 +75,6 @@ import com.example.ui.components.InteractivePositionCalculatorCard
 import com.example.ui.components.KeyLevelsAndPivotsCard
 import com.example.ui.components.LoadingCard
 import com.example.ui.components.OscillatorSubChart
-import com.example.ui.components.PositionEditorDialog
 import com.example.ui.components.PriceCandlestickChart
 import com.example.ui.components.RlActionBadge
 import com.example.ui.components.SentimentBar
@@ -127,11 +125,8 @@ fun StockDetailScreen(
     var showFibonacci by remember { mutableStateOf(false) }
     var showBuySellMarkers by remember { mutableStateOf(true) }
     var showFullChart by remember { mutableStateOf(false) }
+    var selectedChartBarIdx by remember(selectedSymbol, selectedTimeframe) { mutableStateOf<Int?>(null) }
 
-    var showPositionDialog by remember { mutableStateOf(false) }
-    var customPrefillPrice by remember { mutableStateOf<Double?>(null) }
-    var customPrefillStop by remember { mutableStateOf<Double?>(null) }
-    var customPrefillTarget by remember { mutableStateOf<Double?>(null) }
     var customPrefillAlertStop by remember { mutableStateOf<Double?>(null) }
     var showAlertDialog by remember { mutableStateOf(false) }
 
@@ -194,14 +189,6 @@ fun StockDetailScreen(
                         }) {
                             Icon(Icons.Filled.AddAlert, contentDescription = "Add Risk Alert", tint = RiskAmber)
                         }
-                        IconButton(onClick = {
-                            customPrefillPrice = null
-                            customPrefillStop = null
-                            customPrefillTarget = null
-                            showPositionDialog = true
-                        }) {
-                            Icon(Icons.Filled.AddCircleOutline, contentDescription = "Track Position", tint = BullEmerald)
-                        }
                     }
                 }
             }
@@ -222,7 +209,8 @@ fun StockDetailScreen(
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = AiCyanDim,
                                 selectedLabelColor = AiCyan
-                            )
+                            ),
+                            modifier = Modifier.testTag("timeframe_${tf.name.lowercase()}")
                         )
                     }
                 }
@@ -308,6 +296,7 @@ fun StockDetailScreen(
                             predictedUp = predictedUp,
                             prediction = pred,
                             aiForecast = aiForecast,
+                            aiError = (forecastState as? UiState.Error)?.message,
                             isAiLoading = forecastState is UiState.Loading,
                             onVerifyWithAi = { viewModel.runAiForecast() },
                             onExpandChart = { showFullChart = true },
@@ -324,6 +313,7 @@ fun StockDetailScreen(
                             bars = bundle.bars,
                             technicals = tech,
                             currencySymbol = currency,
+                            timeframe = bundle.timeframe,
                             predictedUp = predictedUp,
                             showBollinger = showBollinger,
                             showVwap = showVwap,
@@ -331,6 +321,8 @@ fun StockDetailScreen(
                             showFibonacci = showFibonacci,
                             showBuySellMarkers = showBuySellMarkers,
                             showTradeLevels = true,
+                            selectedIndex = selectedChartBarIdx,
+                            onSelectedIndexChange = { selectedChartBarIdx = it },
                             onOpenFullChart = { showFullChart = true }
                         )
                     }
@@ -407,7 +399,12 @@ fun StockDetailScreen(
                                     )
                                 }
                             }
-                            OscillatorSubChart(technicals = tech, oscillatorType = selectedOscillator)
+                            OscillatorSubChart(
+                                technicals = tech,
+                                oscillatorType = selectedOscillator,
+                                hasForecastGap = true,
+                                selectedIndex = selectedChartBarIdx
+                            )
                         }
                     }
 
@@ -416,7 +413,8 @@ fun StockDetailScreen(
                         item {
                             ChartSignalHistoryCard(
                                 currency = currency,
-                                markers = tech.tradeMarkers
+                                markers = tech.tradeMarkers,
+                                isIntraday = selectedTimeframe.isIntraday
                             )
                         }
                     }
@@ -506,13 +504,7 @@ fun StockDetailScreen(
                             currencySymbol = currency,
                             defaultCapital = riskProfile.accountCapital,
                             defaultRiskPct = riskProfile.defaultRiskPerTradePct,
-                            technicals = tech,
-                            onApplyToPositionEditor = { entry, sl, tp, _ ->
-                                customPrefillPrice = entry
-                                customPrefillStop = sl
-                                customPrefillTarget = tp
-                                showPositionDialog = true
-                            }
+                            technicals = tech
                         )
                     }
 
@@ -566,31 +558,16 @@ fun StockDetailScreen(
                     }
 
                     item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        Button(
+                            onClick = onOpenAiLab,
+                            colors = ButtonDefaults.buttonColors(containerColor = AiCyan, contentColor = ObsidianBg),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
                         ) {
-                            Button(
-                                onClick = onOpenAiLab,
-                                colors = ButtonDefaults.buttonColors(containerColor = AiCyan, contentColor = ObsidianBg),
-                                modifier = Modifier.weight(1f).height(50.dp)
-                            ) {
-                                Icon(Icons.Filled.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.size(6.dp))
-                                Text("AI & RL Lab", fontWeight = FontWeight.Bold)
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    customPrefillPrice = null
-                                    customPrefillStop = null
-                                    customPrefillTarget = null
-                                    showPositionDialog = true
-                                },
-                                border = BorderStroke(1.dp, BullEmerald),
-                                modifier = Modifier.weight(1f).height(50.dp)
-                            ) {
-                                Text("Track Investment", color = BullEmerald)
-                            }
+                            Icon(Icons.Filled.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.size(6.dp))
+                            Text("AI & RL Lab", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -742,6 +719,7 @@ fun StockDetailScreen(
                         bars = currentSuccess.bars,
                         technicals = tech,
                         currencySymbol = currency,
+                        timeframe = currentSuccess.timeframe,
                         predictedUp = predictedUp,
                         showBollinger = showBollinger,
                         showVwap = showVwap,
@@ -749,6 +727,8 @@ fun StockDetailScreen(
                         showFibonacci = showFibonacci,
                         showBuySellMarkers = showBuySellMarkers,
                         showTradeLevels = true,
+                        selectedIndex = selectedChartBarIdx,
+                        onSelectedIndexChange = { selectedChartBarIdx = it },
                         chartHeight = 330.dp
                     )
 
@@ -766,27 +746,15 @@ fun StockDetailScreen(
                             )
                         }
                     }
-                    OscillatorSubChart(technicals = tech, oscillatorType = selectedOscillator)
+                    OscillatorSubChart(
+                        technicals = tech,
+                        oscillatorType = selectedOscillator,
+                        hasForecastGap = true,
+                        selectedIndex = selectedChartBarIdx
+                    )
                 }
             }
         }
-    }
-
-    if (showPositionDialog) {
-        val bundle = (intelState as? UiState.Success)?.data
-        PositionEditorDialog(
-            prefillSymbol = selectedSymbol,
-            prefillExchange = bundle?.quote?.exchange ?: "NASDAQ",
-            prefillCompanyName = bundle?.quote?.companyName ?: selectedSymbol,
-            prefillPrice = customPrefillPrice ?: bundle?.quote?.price,
-            prefillStopLoss = customPrefillStop ?: bundle?.technicals?.stopLossLevel,
-            prefillTakeProfit = customPrefillTarget ?: bundle?.technicals?.takeProfit1,
-            onDismiss = { showPositionDialog = false },
-            onSave = { sym, exch, comp, shares, avg, sl, tp, risk, notes ->
-                viewModel.addPosition(sym, exch, comp, shares, avg, sl, tp, risk, notes)
-                showPositionDialog = false
-            }
-        )
     }
 
     if (showAlertDialog) {
@@ -812,6 +780,7 @@ private fun DirectionPredictionCard(
     predictedUp: Boolean,
     prediction: StrongPredictionResult,
     aiForecast: AiForecastResult?,
+    aiError: String? = null,
     isAiLoading: Boolean,
     onVerifyWithAi: () -> Unit,
     onExpandChart: () -> Unit,
@@ -1017,7 +986,7 @@ private fun DirectionPredictionCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (aiForecast != null) "Gemini AI: ${aiForecast.shortTermBias} (${aiForecast.confidencePercent}%)" else "Tap AI Verify for Gemini macro & thesis check",
+                    text = if (aiForecast != null) "AI Forecast: ${aiForecast.shortTermBias} (${aiForecast.confidencePercent}%)" else "Tap AI Verify for AI macro & thesis check",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                     modifier = Modifier.weight(1f)
@@ -1037,6 +1006,13 @@ private fun DirectionPredictionCard(
                         Text("AI Verify", color = AiCyan, style = MaterialTheme.typography.labelMedium)
                     }
                 }
+            }
+
+            if (!aiError.isNullOrBlank()) {
+                ErrorCard(
+                    message = aiError,
+                    onRetry = onVerifyWithAi
+                )
             }
         }
     }
@@ -1082,10 +1058,13 @@ private fun SuggestionRow(suggestion: TradeSuggestion) {
 @Composable
 private fun ChartSignalHistoryCard(
     currency: String,
-    markers: List<com.example.data.model.ChartTradeMarker>
+    markers: List<com.example.data.model.ChartTradeMarker>,
+    isIntraday: Boolean
 ) {
     val recent = remember(markers) { markers.takeLast(6).reversed() }
-    val dateFormatter = remember { SimpleDateFormat("MMM d", Locale.US) }
+    val dateFormatter = remember(isIntraday) {
+        SimpleDateFormat(if (isIntraday) "MMM d HH:mm" else "MMM d", Locale.US)
+    }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = TerminalSurface),

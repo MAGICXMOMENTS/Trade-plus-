@@ -113,7 +113,7 @@ class AiForecastRepository {
             structuredModel.generateContent(prompt)
         }
         val jsonText = response.text
-            ?: throw IllegalStateException("Gemini returned an empty forecast response.")
+            ?: throw IllegalStateException("AI returned an empty forecast response.")
 
         val json = JSONObject(jsonText)
         val catalystsArr = json.optJSONArray("keyCatalysts")
