@@ -60,7 +60,12 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
             val regularPrice = meta.optDouble("regularMarketPrice", 0.0)
             val prevClose = meta.optDouble("chartPreviousClose", meta.optDouble("previousClose", regularPrice))
             val longName = meta.optString("longName", meta.optString("shortName", symbol))
-            val exchangeName = meta.optString("exchangeName", exchange)
+            val rawExchange = meta.optString("exchangeName", exchange).trim()
+            val exchangeName = when (rawExchange.uppercase()) {
+                "NSI" -> "NSE"
+                "BOM" -> "BSE"
+                else -> rawExchange.ifBlank { exchange }
+            }
 
             val timestamps = result.optJSONArray("timestamp")
             val indicators = result.optJSONObject("indicators")
@@ -150,7 +155,7 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
             val ex = exchange.trim().uppercase()
             val base = clean.replace('.', '-')
             return when {
-                clean.contains('.') && (clean.endsWith(".NS") || clean.endsWith(".BO") || clean.endsWith(".L") || clean.endsWith(".TO")) -> clean
+                clean.contains('.') && (clean.endsWith(".NS") || clean.endsWith(".BO") || clean.endsWith(".L") || clean.endsWith(".TO") || clean.endsWith(".AX") || clean.endsWith(".DE")) -> clean
                 ex == "NSE" -> "$clean.NS"
                 ex == "BSE" -> "$clean.BO"
                 ex == "LSE" -> "$clean.L"

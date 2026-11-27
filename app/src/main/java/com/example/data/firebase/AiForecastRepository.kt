@@ -7,6 +7,8 @@ import com.example.data.model.RiskProfile
 import com.example.data.model.RlPolicyResult
 import com.example.data.model.TechnicalAnalysisResult
 import com.example.data.model.TradingViewQuote
+import com.example.data.remote.currencyFor
+import com.example.data.remote.isIndianStock
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
@@ -26,9 +28,9 @@ class AiForecastRepository {
                 "shortTermBias" to Schema.string(description = "Short-term (1-2 weeks) directional market bias"),
                 "mediumTermBias" to Schema.string(description = "Medium-term (1-3 months) directional trend outlook"),
                 "longTermThesis" to Schema.string(description = "Comprehensive 3-12 month price action thesis grounded in the quantitative telemetry"),
-                "projectedTargetLow" to Schema.double(description = "Conservative downside support / bear-case price target in USD"),
-                "projectedTargetBase" to Schema.double(description = "Base-case 3-6 month price target in USD"),
-                "projectedTargetHigh" to Schema.double(description = "Bull-case upside price target in USD"),
+                "projectedTargetLow" to Schema.double(description = "Conservative downside support / bear-case price target in the asset's trading currency"),
+                "projectedTargetBase" to Schema.double(description = "Base-case 3-6 month price target in the asset's trading currency"),
+                "projectedTargetHigh" to Schema.double(description = "Bull-case upside price target in the asset's trading currency"),
                 "confidencePercent" to Schema.integer(description = "Forecast confidence from 1 to 99"),
                 "sentimentScore" to Schema.integer(description = "Synthesized market & technical sentiment score from -100 to 100"),
                 "sentimentLabel" to Schema.string(description = "One of: Strongly Bearish, Bearish, Neutral, Bullish, Strongly Bullish"),
@@ -72,7 +74,7 @@ class AiForecastRepository {
         rlPolicy: RlPolicyResult,
         riskProfile: RiskProfile
     ): AiForecastResult {
-        val curr = com.example.data.remote.currencyFor(quote.exchange, quote.symbol)
+        val curr = currencyFor(quote.exchange, quote.symbol)
         val currCode = if (curr == "₹") "INR" else "USD"
         val prompt = buildString {
             appendLine("You are an institutional quantitative strategist and risk analyst.")
@@ -118,21 +120,29 @@ class AiForecastRepository {
         val risksArr = json.optJSONArray("keyRiskFactors")
 
         val catalysts = if (catalystsArr != null) {
-            (0 until catalystsArr.length()).map { catalystsArr.getString(it) }
+            (0 until catalystsArr.length()).map { catalystsArr.optString(it).trim() }.filter { it.isNotEmpty() }
         } else emptyList()
 
         val risks = if (risksArr != null) {
-            (0 until risksArr.length()).map { risksArr.getString(it) }
+            (0 until risksArr.length()).map { risksArr.optString(it).trim() }.filter { it.isNotEmpty() }
         } else emptyList()
+
+        val rawLow = json.optDouble("projectedTargetLow", quote.price * 0.9)
+            .takeIf { it.isFinite() && it > 0.0 } ?: (quote.price * 0.9)
+        val rawBase = json.optDouble("projectedTargetBase", quote.price * 1.08)
+            .takeIf { it.isFinite() && it > 0.0 } ?: (quote.price * 1.08)
+        val rawHigh = json.optDouble("projectedTargetHigh", quote.price * 1.2)
+            .takeIf { it.isFinite() && it > 0.0 } ?: (quote.price * 1.2)
+        val orderedTargets = listOf(rawLow, rawBase, rawHigh).sorted()
 
         return AiForecastResult(
             symbol = quote.symbol,
             shortTermBias = json.optString("shortTermBias", "Neutral"),
             mediumTermBias = json.optString("mediumTermBias", "Constructive"),
             longTermThesis = json.optString("longTermThesis", ""),
-            projectedTargetLow = json.optDouble("projectedTargetLow", quote.price * 0.9),
-            projectedTargetBase = json.optDouble("projectedTargetBase", quote.price * 1.08),
-            projectedTargetHigh = json.optDouble("projectedTargetHigh", quote.price * 1.2),
+            projectedTargetLow = orderedTargets[0],
+            projectedTargetBase = orderedTargets[1],
+            projectedTargetHigh = orderedTargets[2],
             confidencePercent = json.optInt("confidencePercent", 65).coerceIn(1, 99),
             sentimentScore = json.optInt("sentimentScore", quote.sentimentScore).coerceIn(-100, 100),
             sentimentLabel = json.optString("sentimentLabel", quote.sentimentLabel),
@@ -148,19 +158,23 @@ class AiForecastRepository {
         liveQuotes: Map<String, TradingViewQuote>,
         riskProfile: RiskProfile
     ): Flow<String> = flow {
+        val portCurr = if (positions.isNotEmpty() && positions.all { isIndianStock(it.exchange, it.symbol) }) "₹" else "$"
         val prompt = buildString {
             appendLine("You are an institutional portfolio risk manager. Provide a concise, actionable portfolio risk & exit-timing briefing in plain structured sections (1. Portfolio Risk Score & Concentration, 2. Stop-Loss & Drawdown Alerts, 3. Tactical Rebalancing Guidance).")
-            appendLine("User Risk Profile: ${riskProfile.riskTolerance}, Capital $${fmt(riskProfile.accountCapital)}, Max Risk/Trade ${riskProfile.defaultRiskPerTradePct}%, Max Drawdown ${riskProfile.maxPortfolioDrawdownPct}%.")
+            appendLine("User Risk Profile: ${riskProfile.riskTolerance}, Capital $portCurr${fmt(riskProfile.accountCapital)}, Max Risk/Trade ${riskProfile.defaultRiskPerTradePct}%, Max Drawdown ${riskProfile.maxPortfolioDrawdownPct}%.")
             appendLine("Active Positions:")
             if (positions.isEmpty()) {
                 appendLine("- No open positions yet. Advise on disciplined watchlist screening and position sizing.")
             } else {
                 positions.forEach { pos ->
                     val quote = liveQuotes[pos.symbol.uppercase()]
+                    val posCurr = currencyFor(quote?.exchange?.ifBlank { pos.exchange } ?: pos.exchange, pos.symbol)
                     val curPrice = quote?.price ?: pos.avgEntryPrice
-                    val pnlPct = ((curPrice - pos.avgEntryPrice) / pos.avgEntryPrice) * 100.0
+                    val pnlPct = if (pos.avgEntryPrice > 0.0) {
+                        ((curPrice - pos.avgEntryPrice) / pos.avgEntryPrice) * 100.0
+                    } else 0.0
                     val value = curPrice * pos.shares
-                    appendLine("- ${pos.symbol}: ${pos.shares} sh @ avg $${fmt(pos.avgEntryPrice)} | Live $${fmt(curPrice)} (${String.format(Locale.US, "%+.2f", pnlPct)}%) | Value $${fmt(value)} | SL $${fmt(pos.stopLossPrice)} | TP $${fmt(pos.takeProfitPrice)} | TV RSI: ${quote?.tvRsi?.let { fmt(it) } ?: "N/A"} | TV Sentiment: ${quote?.sentimentLabel ?: "N/A"}")
+                    appendLine("- ${pos.symbol}: ${pos.shares} sh @ avg $posCurr${fmt(pos.avgEntryPrice)} | Live $posCurr${fmt(curPrice)} (${String.format(Locale.US, "%+.2f", pnlPct)}%) | Value $posCurr${fmt(value)} | SL $posCurr${fmt(pos.stopLossPrice)} | TP $posCurr${fmt(pos.takeProfitPrice)} | TV RSI: ${quote?.tvRsi?.let { fmt(it) } ?: "N/A"} | TV Sentiment: ${quote?.sentimentLabel ?: "N/A"}")
                 }
             }
             appendLine("Be concise, specific to the tickers and levels above, and end with a one-line informational research disclaimer.")

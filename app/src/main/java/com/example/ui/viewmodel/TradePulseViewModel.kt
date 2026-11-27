@@ -142,10 +142,27 @@ class TradePulseViewModel(
                     posList.forEach { if (it.exchange.isNotBlank()) put(it.symbol.uppercase(), it.exchange) }
                 }
 
-                val overview = marketRepo.getMarketOverviewQuotes(extra)
-                val map = overview.associateBy { it.symbol.uppercase() }.toMutableMap()
+                val overview = marketRepo.getMarketOverviewQuotes(extra, preferredExchanges)
+                val map = mutableMapOf<String, TradingViewQuote>()
+                for (q in overview) {
+                    val symKey = q.symbol.uppercase()
+                    val prefEx = preferredExchanges[symKey]
+                        ?: preferredExchanges["$symKey.NS"]
+                        ?: preferredExchanges["$symKey.BO"]
+                    val existing = map[symKey]
+                    val newMatchesPref = !prefEx.isNullOrBlank() && q.exchange.equals(prefEx, ignoreCase = true)
+                    val existingMatchesPref = !prefEx.isNullOrBlank() && existing?.exchange.equals(prefEx, ignoreCase = true)
+                    if (existing == null || (newMatchesPref && !existingMatchesPref)) {
+                        map[symKey] = q
+                    }
+                }
 
-                val missing = extra.filter { it.uppercase() !in map }
+                val missing = extra.filter { sym ->
+                    val bare = sym.trim().uppercase().removeSuffix(".NS").removeSuffix(".BO")
+                    val existing = map[bare] ?: map[sym.trim().uppercase()]
+                    val prefEx = preferredExchanges[sym.uppercase()] ?: preferredExchanges[bare]
+                    existing == null || (!prefEx.isNullOrBlank() && !existing.exchange.equals(prefEx, ignoreCase = true))
+                }
                 if (missing.isNotEmpty()) {
                     map.putAll(marketRepo.getQuotesForSymbols(missing, preferredExchanges))
                 }

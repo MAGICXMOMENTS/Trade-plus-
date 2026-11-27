@@ -62,6 +62,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -121,11 +124,23 @@ fun RiskAlertsScreen(
         it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING
     }
 
-    DisposableEffect(context) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(context, lifecycleOwner) {
         val unregister = RiskAlertNotifier.registerStatusListener(context) { updated ->
             monitorStatus = updated
         }
-        onDispose { unregister() }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasNotificationPermission = RiskAlertNotifier.hasNotificationPermission(context)
+                monitorStatus = RiskAlertNotifier.getMonitorStatus(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            unregister()
+        }
     }
 
     val notificationPermLauncher = rememberLauncherForActivityResult(
@@ -297,11 +312,10 @@ fun RiskAlertsScreen(
                             }
                             OutlinedButton(
                                 onClick = {
+                                    AlertMonitorScheduler.runImmediateCheck(context, forceNotify = hasNotificationPermission)
+                                    viewModel.refreshMarketData()
                                     if (!hasNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                         notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    } else {
-                                        AlertMonitorScheduler.runImmediateCheck(context, forceNotify = true)
-                                        viewModel.refreshMarketData()
                                     }
                                 },
                                 enabled = !isCheckingNow,

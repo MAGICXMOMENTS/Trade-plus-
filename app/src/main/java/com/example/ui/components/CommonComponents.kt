@@ -53,6 +53,7 @@ import com.example.data.model.AlertType
 import com.example.data.model.Position
 import com.example.data.model.RlAction
 import com.example.data.model.SignalTier
+import com.example.data.remote.currencyFor
 import com.example.ui.theme.AiCyan
 import com.example.ui.theme.AiCyanDim
 import com.example.ui.theme.BearCoral
@@ -273,38 +274,45 @@ fun PositionEditorDialog(
         notes: String
     ) -> Unit
 ) {
-    var symbol by remember { mutableStateOf(existingPosition?.symbol ?: prefillSymbol) }
-    var exchange by remember { mutableStateOf(existingPosition?.exchange ?: prefillExchange) }
-    var companyName by remember { mutableStateOf(existingPosition?.companyName ?: prefillCompanyName) }
-    var sharesText by remember {
+    var symbol by remember(existingPosition?.id, prefillSymbol) {
+        mutableStateOf(existingPosition?.symbol ?: prefillSymbol)
+    }
+    var exchange by remember(existingPosition?.id, prefillExchange) {
+        mutableStateOf(existingPosition?.exchange ?: prefillExchange)
+    }
+    var companyName by remember(existingPosition?.id, prefillCompanyName) {
+        mutableStateOf(existingPosition?.companyName ?: prefillCompanyName)
+    }
+    var sharesText by remember(existingPosition?.id) {
         mutableStateOf(existingPosition?.shares?.let { fmtInput(it) } ?: "10")
     }
-    var entryText by remember {
+    var entryText by remember(existingPosition?.id, prefillPrice) {
         mutableStateOf(
             existingPosition?.avgEntryPrice?.let { fmtInput(it) }
                 ?: prefillPrice?.let { fmtInput(it) }
                 ?: ""
         )
     }
-    var slText by remember {
+    var slText by remember(existingPosition?.id, prefillStopLoss) {
         mutableStateOf(
             existingPosition?.stopLossPrice?.takeIf { it > 0.0 }?.let { fmtInput(it) }
                 ?: prefillStopLoss?.let { fmtInput(it) }
                 ?: ""
         )
     }
-    var tpText by remember {
+    var tpText by remember(existingPosition?.id, prefillTakeProfit) {
         mutableStateOf(
             existingPosition?.takeProfitPrice?.takeIf { it > 0.0 }?.let { fmtInput(it) }
                 ?: prefillTakeProfit?.let { fmtInput(it) }
                 ?: ""
         )
     }
-    var riskPctText by remember {
+    var riskPctText by remember(existingPosition?.id) {
         mutableStateOf(existingPosition?.maxRiskPercent?.let { fmtInput(it) } ?: "2.0")
     }
-    var notes by remember { mutableStateOf(existingPosition?.notes ?: "") }
-    var validationError by remember { mutableStateOf<String?>(null) }
+    var notes by remember(existingPosition?.id) { mutableStateOf(existingPosition?.notes ?: "") }
+    var validationError by remember(existingPosition?.id) { mutableStateOf<String?>(null) }
+    val currHint = currencyFor(exchange, symbol)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -351,7 +359,7 @@ fun PositionEditorDialog(
                     OutlinedTextField(
                         value = entryText,
                         onValueChange = { entryText = it },
-                        label = { Text("Avg Entry $") },
+                        label = { Text("Avg Entry $currHint") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
                         modifier = Modifier.weight(1f).testTag("position_entry_input")
@@ -361,7 +369,7 @@ fun PositionEditorDialog(
                     OutlinedTextField(
                         value = slText,
                         onValueChange = { slText = it },
-                        label = { Text("Stop-Loss $") },
+                        label = { Text("Stop-Loss $currHint") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
                         modifier = Modifier.weight(1f)
@@ -369,7 +377,7 @@ fun PositionEditorDialog(
                     OutlinedTextField(
                         value = tpText,
                         onValueChange = { tpText = it },
-                        label = { Text("Take-Profit $") },
+                        label = { Text("Take-Profit $currHint") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
                         modifier = Modifier.weight(1f)
@@ -409,23 +417,35 @@ fun PositionEditorDialog(
                     val tp = tpText.toDoubleOrNull() ?: 0.0
                     val rp = riskPctText.toDoubleOrNull() ?: 2.0
 
+                    val inferredExchange = exchange.trim().ifBlank {
+                        when {
+                            cleanSym.endsWith(".NS") -> "NSE"
+                            cleanSym.endsWith(".BO") -> "BSE"
+                            else -> "NASDAQ"
+                        }
+                    }
+
                     when {
                         cleanSym.isEmpty() || cleanSym.length > 20 ->
                             validationError = "Enter a valid ticker symbol (1-20 chars)."
-                        sh == null || sh <= 0.0 ->
-                            validationError = "Shares must be a positive number."
-                        ep == null || ep <= 0.0 ->
-                            validationError = "Average entry price must be positive."
-                        rp < 0.1 || rp > 100.0 ->
+                        sh == null || !sh.isFinite() || sh <= 0.0 || sh > 100_000_000.0 ->
+                            validationError = "Shares must be between 0 and 100,000,000."
+                        ep == null || !ep.isFinite() || ep <= 0.0 || ep > 10_000_000.0 ->
+                            validationError = "Average entry price must be between 0 and 10,000,000."
+                        !sl.isFinite() || sl < 0.0 || sl > 10_000_000.0 ->
+                            validationError = "Stop-loss must be between 0 and 10,000,000."
+                        !tp.isFinite() || tp < 0.0 || tp > 10_000_000.0 ->
+                            validationError = "Take-profit must be between 0 and 10,000,000."
+                        !rp.isFinite() || rp < 0.1 || rp > 100.0 ->
                             validationError = "Max risk % must be between 0.1 and 100."
                         else -> onSave(
                             cleanSym,
-                            exchange.ifBlank { "NASDAQ" },
+                            inferredExchange,
                             companyName.ifBlank { cleanSym },
                             sh,
                             ep,
-                            sl.coerceAtLeast(0.0),
-                            tp.coerceAtLeast(0.0),
+                            sl,
+                            tp,
                             rp,
                             notes
                         )
@@ -455,18 +475,18 @@ fun AddRiskAlertDialog(
     onDismiss: () -> Unit,
     onSave: (symbol: String, alertType: AlertType, threshold: Double, notes: String) -> Unit
 ) {
-    var symbol by remember { mutableStateOf(prefillSymbol.ifBlank { "NVDA" }) }
-    var selectedType by remember { mutableStateOf(AlertType.STOP_LOSS) }
+    var symbol by remember(prefillSymbol) { mutableStateOf(prefillSymbol.ifBlank { "NVDA" }) }
+    var selectedType by remember(prefillSymbol) { mutableStateOf(AlertType.STOP_LOSS) }
     var expanded by remember { mutableStateOf(false) }
-    var thresholdText by remember {
+    var thresholdText by remember(prefillSymbol, prefillPrice, prefillStopLoss) {
         mutableStateOf(
             prefillStopLoss?.let { fmtInput(it) }
                 ?: prefillPrice?.let { fmtInput(it * 0.94) }
                 ?: "100.0"
         )
     }
-    var notes by remember { mutableStateOf("") }
-    var errorText by remember { mutableStateOf<String?>(null) }
+    var notes by remember(prefillSymbol) { mutableStateOf("") }
+    var errorText by remember(prefillSymbol) { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -548,8 +568,8 @@ fun AddRiskAlertDialog(
                     when {
                         cleanSym.isEmpty() || cleanSym.length > 20 ->
                             errorText = "Enter a valid ticker symbol."
-                        threshold == null || threshold < 0.0 ->
-                            errorText = "Enter a valid non-negative threshold."
+                        threshold == null || !threshold.isFinite() || threshold < 0.0 || threshold > 10_000_000.0 ->
+                            errorText = "Enter a threshold between 0 and 10,000,000."
                         else -> onSave(cleanSym, selectedType, threshold, notes)
                     }
                 },

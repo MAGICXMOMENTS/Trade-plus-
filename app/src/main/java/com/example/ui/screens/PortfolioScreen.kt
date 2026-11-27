@@ -28,7 +28,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -65,6 +65,7 @@ import com.example.data.model.TradingViewQuote
 import com.example.data.model.UiState
 import com.example.data.model.WatchlistStock
 import com.example.data.remote.currencyFor
+import com.example.data.remote.isIndianStock
 import com.example.ui.components.ErrorCard
 import com.example.ui.components.LoadingCard
 import com.example.ui.components.PositionEditorDialog
@@ -224,10 +225,16 @@ fun PortfolioScreen(
                         val closedPositions = state.data.filter { it.statusEnum() == PositionStatus.CLOSED }
 
                         val metrics = computePortfolioMetrics(activePositions, liveQuotes)
+                        val summaryCurrency = if (activePositions.isNotEmpty() && activePositions.all { isIndianStock(it.exchange, it.symbol) }) {
+                            "₹"
+                        } else {
+                            "$"
+                        }
 
                         item {
                             PortfolioPerformanceCard(
                                 metrics = metrics,
+                                currencySymbol = summaryCurrency,
                                 riskTolerance = riskProfile.toleranceEnum().label,
                                 alertCount = triggeredAlerts.size
                             )
@@ -523,6 +530,7 @@ private fun computePortfolioMetrics(
 @Composable
 private fun PortfolioPerformanceCard(
     metrics: PortfolioSummaryMetrics,
+    currencySymbol: String,
     riskTolerance: String,
     alertCount: Int
 ) {
@@ -572,7 +580,7 @@ private fun PortfolioPerformanceCard(
             }
 
             Text(
-                text = "$${fmtMoney(metrics.totalValue)}",
+                text = "$currencySymbol${fmtMoney(metrics.totalValue)}",
                 style = MonoNumericLarge,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -586,7 +594,7 @@ private fun PortfolioPerformanceCard(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = "${if (positive) "+" else ""}$${fmtMoney(metrics.unrealizedPnl)} (${String.format(Locale.US, "%+.2f", metrics.unrealizedPnlPct)}%)",
+                        text = "${if (positive) "+" else ""}$currencySymbol${fmtMoney(metrics.unrealizedPnl)} (${String.format(Locale.US, "%+.2f", metrics.unrealizedPnlPct)}%)",
                         style = MonoNumericSmall,
                         color = pnlColor,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -605,7 +613,7 @@ private fun PortfolioPerformanceCard(
             ) {
                 PortfolioStatTile(
                     label = "COST BASIS",
-                    value = "$${fmtMoney(metrics.totalCost)}",
+                    value = "$currencySymbol${fmtMoney(metrics.totalCost)}",
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
@@ -867,7 +875,7 @@ private fun EmptyHoldingsCard(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Filled.TrendingUp,
+                    imageVector = Icons.AutoMirrored.Filled.TrendingUp,
                     contentDescription = null,
                     tint = BullEmerald,
                     modifier = Modifier.size(28.dp)

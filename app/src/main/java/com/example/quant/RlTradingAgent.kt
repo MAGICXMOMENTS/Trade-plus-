@@ -72,7 +72,7 @@ object RlTradingAgent {
                     argmax(qVals)
                 }
 
-                val ret = ln((closes[t] / closes[t - 1]).coerceAtLeast(0.0001))
+                val ret = ln((closes[t] / closes[t - 1].coerceAtLeast(0.01)).coerceAtLeast(0.0001))
                 val exposure = exposureByAction[action]
                 val turnoverPenalty = if (action != prevAction) txCostBps else 0.0
                 val drawdownPenalty = if (ret < -0.015 && exposure > 0.0) absPenalty(ret, exposure) else 0.0

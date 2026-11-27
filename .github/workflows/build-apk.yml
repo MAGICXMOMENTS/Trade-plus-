@@ -34,8 +34,10 @@ jobs:
           if [ -n "$SDKMANAGER" ]; then
             set +o pipefail
             yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" --licenses >/dev/null || true
+            if [ ! -d "$SDK_DIR/platforms/android-36.1" ] || [ ! -d "$SDK_DIR/build-tools/36.0.0" ]; then
+              yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" "platforms;android-36.1" "build-tools;36.0.0"
+            fi
             set -o pipefail
-            "$SDKMANAGER" --sdk_root="$SDK_DIR" "platforms;android-36.1" "build-tools;36.0.0"
           else
             echo "sdkmanager not found under $SDK_DIR" >&2
             exit 1

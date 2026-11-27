@@ -525,14 +525,14 @@ object TechnicalIndicatorEngine {
         if (bars.size < kPeriod) return kSeries to kSeries
 
         for (i in (kPeriod - 1) until bars.size) {
-            var highest = Double.MIN_VALUE
+            var highest = Double.NEGATIVE_INFINITY
             var lowest = Double.MAX_VALUE
             for (j in (i - kPeriod + 1)..i) {
                 if (bars[j].high > highest) highest = bars[j].high
                 if (bars[j].low < lowest) lowest = bars[j].low
             }
             val range = (highest - lowest).coerceAtLeast(0.0001)
-            kSeries[i] = ((bars[i].close - lowest) / range) * 100.0
+            kSeries[i] = (((bars[i].close - lowest) / range) * 100.0).coerceIn(0.0, 100.0)
         }
 
         val dSeries = MutableList<Double?>(bars.size) { null }
@@ -712,14 +712,14 @@ object TechnicalIndicatorEngine {
         val out = MutableList<Double?>(bars.size) { null }
         if (bars.size < period) return out
         for (i in (period - 1) until bars.size) {
-            var highest = Double.MIN_VALUE
+            var highest = Double.NEGATIVE_INFINITY
             var lowest = Double.MAX_VALUE
             for (j in (i - period + 1)..i) {
                 highest = max(highest, bars[j].high)
                 lowest = min(lowest, bars[j].low)
             }
             val range = (highest - lowest).coerceAtLeast(0.0001)
-            out[i] = ((highest - bars[i].close) / range) * -100.0
+            out[i] = (((highest - bars[i].close) / range) * -100.0).coerceIn(-100.0, 0.0)
         }
         return out
     }

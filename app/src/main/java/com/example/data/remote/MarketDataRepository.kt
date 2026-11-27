@@ -30,7 +30,7 @@ data class StockIntelligenceBundle(
 fun isIndianStock(exchange: String, symbol: String = ""): Boolean {
     val ex = exchange.trim().uppercase()
     val sym = symbol.trim().uppercase()
-    return ex == "NSE" || ex == "BSE" || sym.endsWith(".NS") || sym.endsWith(".BO")
+    return ex == "NSE" || ex == "BSE" || ex == "NSI" || ex == "BOM" || sym.endsWith(".NS") || sym.endsWith(".BO")
 }
 
 fun currencyFor(exchange: String, symbol: String = ""): String =
@@ -50,7 +50,10 @@ class MarketDataRepository {
     private val quoteCache = ConcurrentHashMap<String, TradingViewQuote>()
     private val chartCache = ConcurrentHashMap<String, Pair<Long, HistoricalChartPayload>>()
 
-    suspend fun getMarketOverviewQuotes(extraSymbols: List<String> = emptyList()): List<TradingViewQuote> =
+    suspend fun getMarketOverviewQuotes(
+        extraSymbols: List<String> = emptyList(),
+        preferredExchanges: Map<String, String> = emptyMap()
+    ): List<TradingViewQuote> =
         withContext(Dispatchers.IO) {
             val usDeferred = async {
                 try {
@@ -76,13 +79,18 @@ class MarketDataRepository {
                 "NVDA", "AAPL", "MSFT", "TSLA", "SPY",
                 "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "TATAMOTORS"
             )
-            val existingLeaders = (usLeaders + indiaLeaders).map { it.symbol.uppercase() }.toSet()
+            val existingLeaders = (usLeaders + indiaLeaders).map { "${it.symbol.uppercase()}_${it.exchange.uppercase()}" }.toSet()
+            val existingBare = (usLeaders + indiaLeaders).map { it.symbol.uppercase() }.toSet()
             val requested = (defaultCore + extraSymbols).map { it.trim().uppercase() }.distinct()
-            val missingSymbols = requested.filter { it.removeSuffix(".NS").removeSuffix(".BO") !in existingLeaders }
+            val missingSymbols = requested.filter { sym ->
+                val bare = sym.removeSuffix(".NS").removeSuffix(".BO")
+                val prefEx = preferredExchanges[sym].orEmpty().ifBlank { preferredExchanges[bare].orEmpty() }.uppercase()
+                if (prefEx.isNotBlank()) "${bare}_$prefEx" !in existingLeaders else bare !in existingBare
+            }
 
             val extraQuotes = if (missingSymbols.isNotEmpty()) {
                 try {
-                    tradingViewApi.fetchQuotes(missingSymbols)
+                    tradingViewApi.fetchQuotes(missingSymbols, preferredExchanges)
                 } catch (e: Exception) {
                     Log.w(TAG, "Extra symbol scan failed: ${e.message}")
                     emptyList()
@@ -97,7 +105,13 @@ class MarketDataRepository {
                         .thenByDescending { it.volume }
                 )
 
-            combined.forEach { quoteCache[it.symbol.uppercase()] = it }
+            combined.forEach {
+                val symKey = it.symbol.uppercase()
+                quoteCache[symKey] = it
+                if (it.exchange.isNotBlank()) {
+                    quoteCache["${symKey}_${it.exchange.uppercase()}"] = it
+                }
+            }
 
             if (combined.isEmpty()) {
                 throw IllegalStateException("Unable to reach TradingView market scanner. Check internet connectivity and retry.")
@@ -122,16 +136,25 @@ class MarketDataRepository {
 
             val resultMap = linkedMapOf<String, TradingViewQuote>()
             tvQuotes.forEach {
-                resultMap[it.symbol.uppercase()] = it
-                quoteCache[it.symbol.uppercase()] = it
+                val symKey = it.symbol.uppercase()
+                resultMap[symKey] = it
+                quoteCache[symKey] = it
+                if (it.exchange.isNotBlank()) {
+                    quoteCache["${symKey}_${it.exchange.uppercase()}"] = it
+                }
             }
 
             for (sym in clean) {
                 val baseKey = sym.removeSuffix(".NS").removeSuffix(".BO")
-                val prefEx = preferredExchanges[sym].orEmpty().ifBlank { preferredExchanges[baseKey].orEmpty() }
+                val prefEx = preferredExchanges[sym].orEmpty().ifBlank { preferredExchanges[baseKey].orEmpty() }.uppercase()
                 if (sym !in resultMap && baseKey !in resultMap) {
-                    val cached = quoteCache[sym] ?: quoteCache[baseKey]
-                    if (cached != null && System.currentTimeMillis() - cached.fetchedAtMs < 60_000L) {
+                    val cached = (if (prefEx.isNotBlank()) {
+                        quoteCache["${baseKey}_$prefEx"] ?: quoteCache["${sym}_$prefEx"]
+                    } else null) ?: quoteCache[sym] ?: quoteCache[baseKey]
+                    if (cached != null &&
+                        System.currentTimeMillis() - cached.fetchedAtMs < 60_000L &&
+                        (prefEx.isBlank() || cached.exchange.equals(prefEx, ignoreCase = true))
+                    ) {
                         resultMap[sym] = cached
                     } else {
                         try {
@@ -139,6 +162,9 @@ class MarketDataRepository {
                             val q = yahooApi.fallbackQuoteFromChart(chart)
                             resultMap[sym] = q
                             quoteCache[sym] = q
+                            if (q.exchange.isNotBlank()) {
+                                quoteCache["${baseKey}_${q.exchange.uppercase()}"] = q
+                            }
                         } catch (e: Exception) {
                             Log.w(TAG, "Yahoo quote fallback failed for $sym: ${e.message}")
                         }
@@ -188,20 +214,37 @@ class MarketDataRepository {
             chartPayload.bars
         }
 
+        val lookupSym = cleanSymbol.removeSuffix(".NS").removeSuffix(".BO")
+        val targetEx = when {
+            exchange.isNotBlank() -> exchange.trim().uppercase()
+            cleanSymbol.endsWith(".NS") -> "NSE"
+            cleanSymbol.endsWith(".BO") -> "BSE"
+            else -> ""
+        }
+        val scopedCached = if (targetEx.isNotBlank()) {
+            quoteCache["${lookupSym}_$targetEx"]
+                ?: quoteCache[cleanSymbol]?.takeIf { it.exchange.equals(targetEx, ignoreCase = true) }
+        } else {
+            quoteCache[cleanSymbol] ?: quoteCache[lookupSym]
+        }
+
         val tvQuote = try {
-            val lookupSym = cleanSymbol.removeSuffix(".NS").removeSuffix(".BO")
-            val fetched = tradingViewApi.fetchQuotes(listOf(lookupSym))
+            val prefMap = if (targetEx.isNotBlank()) mapOf(lookupSym to targetEx) else emptyMap()
+            val fetched = tradingViewApi.fetchQuotes(listOf(lookupSym), prefMap)
             fetched.firstOrNull {
                 it.symbol.equals(lookupSym, ignoreCase = true) &&
-                    (exchange.isBlank() || it.exchange.equals(exchange, ignoreCase = true))
+                    (targetEx.isBlank() || it.exchange.equals(targetEx, ignoreCase = true))
             }
                 ?: fetched.firstOrNull { it.symbol.equals(lookupSym, ignoreCase = true) }
-                ?: quoteCache[cleanSymbol]
+                ?: scopedCached
                 ?: yahooApi.fallbackQuoteFromChart(chartPayload)
         } catch (_: Exception) {
-            quoteCache[cleanSymbol] ?: yahooApi.fallbackQuoteFromChart(chartPayload)
+            scopedCached ?: yahooApi.fallbackQuoteFromChart(chartPayload)
         }.also {
             quoteCache[cleanSymbol] = it
+            if (it.exchange.isNotBlank()) {
+                quoteCache["${lookupSym}_${it.exchange.uppercase()}"] = it
+            }
         }
 
         val curr = currencyFor(tvQuote.exchange.ifBlank { exchange }, cleanSymbol)

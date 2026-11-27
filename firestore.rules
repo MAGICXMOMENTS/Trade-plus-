@@ -69,7 +69,7 @@ service cloud.firestore {
              data.accountCapital is number && data.accountCapital >= 100 && data.accountCapital <= 1000000000 &&
              data.defaultRiskPerTradePct is number && data.defaultRiskPerTradePct >= 0.1 && data.defaultRiskPerTradePct <= 25 &&
              data.maxPortfolioDrawdownPct is number && data.maxPortfolioDrawdownPct >= 1 && data.maxPortfolioDrawdownPct <= 80 &&
-             data.preferredTimeframe in ['1D', '1W', '1M', '3M', '1Y'] &&
+             data.preferredTimeframe in ['1D', '1W', '1M', '3M', '1Y', '5Y'] &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
