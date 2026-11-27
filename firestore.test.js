@@ -257,6 +257,7 @@ test("Watchlist, RiskAlertRule, and RiskProfile valid payloads and bounds enforc
     profileRef.update({
       accountCapital: 65000.0,
       riskTolerance: "AGGRESSIVE",
+      preferredTimeframe: "5Y",
       updatedAt: new Date(Date.now() - 1000),
     })
   );

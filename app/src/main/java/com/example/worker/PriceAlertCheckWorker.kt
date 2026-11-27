@@ -5,6 +5,9 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.R
+import com.example.data.firebase.ensureFirebaseAppInitialized
+import com.example.data.firebase.safeFirebaseAuth
+import com.example.data.firebase.safeFirebaseFirestore
 import com.example.data.model.Position
 import com.example.data.model.PositionStatus
 import com.example.data.model.RiskAlertRule
@@ -13,10 +16,7 @@ import com.example.data.model.WatchlistStock
 import com.example.data.remote.MarketDataRepository
 import com.example.notifications.RiskAlertNotifier
 import com.example.quant.RiskAlertEvaluator
-import com.google.firebase.Firebase
-import com.google.firebase.FirebaseApp
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.tasks.await
@@ -28,12 +28,13 @@ class PriceAlertCheckWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
-        if (FirebaseApp.getApps(applicationContext).isEmpty()) {
-            FirebaseApp.initializeApp(applicationContext)
+        if (!ensureFirebaseAppInitialized(applicationContext)) {
+            RiskAlertNotifier.recordCheckStatus(applicationContext, "Paused: Firebase not configured")
+            return Result.success()
         }
 
         val forceNotify = inputData.getBoolean(KEY_FORCE_NOTIFY, false)
-        val user = Firebase.auth.currentUser
+        val user = safeFirebaseAuth()?.currentUser
         if (user == null) {
             RiskAlertNotifier.recordCheckStatus(applicationContext, "Paused: sign in to monitor alerts")
             return Result.success()
@@ -42,18 +43,34 @@ class PriceAlertCheckWorker(
         return try {
             val uid = user.uid
             val dbId = applicationContext.getString(R.string.firestore_database_id)
-            val db = FirebaseFirestore.getInstance(dbId)
+            val db = safeFirebaseFirestore(dbId)
+                ?: run {
+                    RiskAlertNotifier.recordCheckStatus(applicationContext, "Paused: Firestore unavailable")
+                    return Result.failure()
+                }
 
             val positionsSnap = db.collection("users").document(uid).collection("positions").get().await()
             val rulesSnap = db.collection("users").document(uid).collection("riskAlerts").get().await()
             val watchlistSnap = db.collection("users").document(uid).collection("watchlist").get().await()
             val profileSnap = db.collection("users").document(uid).collection("profile").document("settings").get().await()
 
-            val positions = positionsSnap.toObjects(Position::class.java)
-            val rules = rulesSnap.toObjects(RiskAlertRule::class.java)
-            val watchlist = watchlistSnap.toObjects(WatchlistStock::class.java)
+            val positions = positionsSnap.toObjects(
+                Position::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            )
+            val rules = rulesSnap.toObjects(
+                RiskAlertRule::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            )
+            val watchlist = watchlistSnap.toObjects(
+                WatchlistStock::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            )
             val profile = if (profileSnap.exists()) {
-                profileSnap.toObject(RiskProfile::class.java) ?: RiskProfile(userId = uid)
+                profileSnap.toObject(
+                    RiskProfile::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ) ?: RiskProfile(userId = uid)
             } else {
                 RiskProfile(userId = uid)
             }

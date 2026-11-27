@@ -210,7 +210,7 @@
         },
         "preferredTimeframe": {
           "type": "string",
-          "enum": ["1D", "1W", "1M", "3M", "1Y"],
+          "enum": ["1D", "1W", "1M", "3M", "1Y", "5Y"],
           "description": "Preferred chart and indicator analysis horizon."
         },
         "createdAt": {
