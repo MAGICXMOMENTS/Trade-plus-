@@ -51,6 +51,22 @@ jobs:
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Verify Firebase configuration
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            if printf '%s' "$GOOGLE_SERVICES_JSON" | grep -q '^{'; then
+              printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            else
+              printf '%s' "$GOOGLE_SERVICES_JSON" | base64 -d > app/google-services.json
+            fi
+          fi
+          if [ ! -f app/google-services.json ]; then
+            echo "::error::app/google-services.json is missing. Add app/google-services.json to your repository or set the GOOGLE_SERVICES_JSON GitHub Actions secret before building the APK." >&2
+            exit 1
+          fi
+
       - name: Build Debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
