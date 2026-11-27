@@ -8,4 +8,5 @@
     <string name="sign_in_subtitle">Real-time TradingView market telemetry, multi-indicator signals, Q-learning policy optimization, and Gemini predictive forecasting.</string>
     <string name="sign_in_google">Sign in with Google</string>
     <string name="disclaimer_text">Market analytics, RL signals, and AI forecasts are for informational and educational research only and do not constitute financial advice.</string>
+    <string name="default_web_client_id">placeholder.apps.googleusercontent.com</string>
 </resources>
