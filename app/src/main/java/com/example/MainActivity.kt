@@ -21,11 +21,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Mandatory: Configure App Check with launch intent before setContent or ViewModels
+        enableEdgeToEdge()
+        // Configure App Check with launch intent before ViewModels; no-ops safely if Firebase config is missing.
         configureAppCheck(this, intent)
         extractNotificationTarget(intent)
 
-        enableEdgeToEdge()
         setContent {
             TradePulseTheme {
                 TradePulseApp(
@@ -48,13 +48,17 @@ class MainActivity : ComponentActivity() {
 
     private fun extractNotificationTarget(intent: Intent?) {
         if (intent == null) return
-        val sym = intent.getStringExtra(RiskAlertNotifier.EXTRA_ALERT_SYMBOL)
-        val openAlerts = intent.getBooleanExtra(RiskAlertNotifier.EXTRA_OPEN_ALERTS, false)
-        if (!sym.isNullOrBlank()) {
-            launchSymbol = sym
-        }
-        if (openAlerts) {
-            launchOpenAlerts = true
+        try {
+            val sym = intent.getStringExtra(RiskAlertNotifier.EXTRA_ALERT_SYMBOL)
+            val openAlerts = intent.getBooleanExtra(RiskAlertNotifier.EXTRA_OPEN_ALERTS, false)
+            if (!sym.isNullOrBlank()) {
+                launchSymbol = sym
+            }
+            if (openAlerts) {
+                launchOpenAlerts = true
+            }
+        } catch (_: Throwable) {
+            // Ignore malformed external launcher extras
         }
     }
 }

@@ -1,23 +1,42 @@
 package com.example.ui
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.CandlestickChart
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.CandlestickChart
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -38,13 +57,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -56,11 +76,17 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.R
 import com.example.data.firebase.AiForecastRepository
+import com.example.data.firebase.FirebaseReadiness
 import com.example.data.firebase.PortfolioRepository
+import com.example.data.firebase.configureAppCheck
+import com.example.data.firebase.evaluateFirebaseReadiness
+import com.example.data.firebase.safeFirebaseAuth
+import com.example.data.firebase.safeFirebaseFirestore
 import com.example.data.remote.MarketDataRepository
 import com.example.notifications.RiskAlertNotifier
 import com.example.worker.AlertMonitorScheduler
 import com.example.ui.auth.AuthScreen
+import com.example.ui.components.ErrorCard
 import com.example.ui.screens.AiLabScreen
 import com.example.ui.screens.PortfolioScreen
 import com.example.ui.screens.MarketsScreen
@@ -69,14 +95,14 @@ import com.example.ui.screens.StockDetailScreen
 import com.example.ui.theme.AiCyan
 import com.example.ui.theme.AiCyanDim
 import com.example.ui.theme.BearCoral
+import com.example.ui.theme.BearCoralDim
+import com.example.ui.theme.BullEmerald
 import com.example.ui.theme.ObsidianBg
 import com.example.ui.theme.TerminalSurface
 import com.example.ui.theme.TextMuted
+import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.TradePulseViewModel
-import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
 
 const val ROUTE_DASHBOARD = "dashboard"
 const val ROUTE_MARKETS = "markets"
@@ -129,21 +155,53 @@ fun TradePulseApp(
     launchOpenAlerts: Boolean = false,
     onConsumeLaunchTarget: () -> Unit = {}
 ) {
-    var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+    val context = LocalContext.current
+    var firebaseReadiness by remember(context) {
+        mutableStateOf(evaluateFirebaseReadiness(context))
+    }
 
-    DisposableEffect(Unit) {
+    if (!firebaseReadiness.isReady) {
+        FirebaseSetupRequiredScreen(
+            readiness = firebaseReadiness,
+            onRetry = {
+                configureAppCheck(context, null)
+                firebaseReadiness = evaluateFirebaseReadiness(context)
+            }
+        )
+        return
+    }
+
+    val firebaseAuth = remember(firebaseReadiness) { safeFirebaseAuth() }
+    if (firebaseAuth == null) {
+        FirebaseSetupRequiredScreen(
+            readiness = FirebaseReadiness(
+                isReady = false,
+                missingItems = listOf("Firebase Authentication instance"),
+                detailMessage = "Firebase Authentication could not be initialized."
+            ),
+            onRetry = {
+                configureAppCheck(context, null)
+                firebaseReadiness = evaluateFirebaseReadiness(context)
+            }
+        )
+        return
+    }
+
+    var currentUser by remember(firebaseAuth) { mutableStateOf(firebaseAuth.currentUser) }
+
+    DisposableEffect(firebaseAuth) {
         val listener = FirebaseAuth.AuthStateListener { auth ->
             currentUser = auth.currentUser
         }
-        Firebase.auth.addAuthStateListener(listener)
-        onDispose { Firebase.auth.removeAuthStateListener(listener) }
+        firebaseAuth.addAuthStateListener(listener)
+        onDispose { firebaseAuth.removeAuthStateListener(listener) }
     }
 
     val user = currentUser
     if (user == null) {
         AuthScreen(
             onAuthSuccess = {
-                currentUser = Firebase.auth.currentUser
+                currentUser = safeFirebaseAuth()?.currentUser
             }
         )
     } else {
@@ -160,23 +218,172 @@ fun TradePulseApp(
 }
 
 @Composable
+private fun FirebaseSetupRequiredScreen(
+    readiness: FirebaseReadiness,
+    onRetry: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ObsidianBg)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(20.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 520.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = TerminalSurface),
+                border = BorderStroke(1.dp, BearCoral.copy(alpha = 0.55f)),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(BearCoralDim, RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ErrorOutline,
+                                contentDescription = "Firebase configuration required",
+                                tint = BearCoral
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Firebase Setup Incomplete",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "TradePulse needs valid Firebase config before sign-in",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = readiness.detailMessage
+                            ?: "Required Firebase configuration files or values are missing from this build.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+
+                    if (readiness.missingItems.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(ObsidianBg, RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "MISSING OR PLACEHOLDER ITEMS",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BearCoral,
+                                fontWeight = FontWeight.Bold
+                            )
+                            readiness.missingItems.forEach { item ->
+                                Text(
+                                    text = "• $item",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = onRetry,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BullEmerald,
+                            contentColor = ObsidianBg
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("retry_firebase_setup_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text(
+                            text = "Retry Initialization",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AuthenticatedShell(
     currentUserId: String,
     launchSymbol: String?,
     launchOpenAlerts: Boolean,
     onConsumeLaunchTarget: () -> Unit
 ) {
+    val context = LocalContext.current
+    val databaseId = remember(context) {
+        try {
+            context.applicationContext.getString(R.string.firestore_database_id)
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+    var dbInitNonce by remember { mutableStateOf(0) }
+    val firestoreDb = remember(databaseId, dbInitNonce) {
+        safeFirebaseFirestore(databaseId)
+    }
+    val firebaseAuth = remember(dbInitNonce) {
+        safeFirebaseAuth()
+    }
+
+    if (firestoreDb == null || firebaseAuth == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ObsidianBg)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(20.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            ErrorCard(
+                message = "Unable to initialize Cloud Firestore ($databaseId). Verify app/google-services.json and firebase_applet_config.xml.",
+                onRetry = { dbInitNonce++ },
+                modifier = Modifier.widthIn(max = 520.dp)
+            )
+        }
+        return
+    }
+
     val viewModel: TradePulseViewModel = viewModel(
-        key = currentUserId,
+        key = "$currentUserId:$databaseId",
         factory = viewModelFactory {
             initializer {
-                val app = checkNotNull(this[APPLICATION_KEY]) {
-                    "APPLICATION_KEY missing from CreationExtras"
-                }
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
                 TradePulseViewModel(
-                    portfolioRepo = PortfolioRepository(db),
+                    portfolioRepo = PortfolioRepository(firestoreDb, firebaseAuth),
                     marketRepo = MarketDataRepository(),
                     aiRepo = AiForecastRepository(),
                     currentUserId = currentUserId
@@ -184,8 +391,6 @@ private fun AuthenticatedShell(
             }
         }
     )
-
-    val context = LocalContext.current
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route

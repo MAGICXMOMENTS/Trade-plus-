@@ -71,7 +71,13 @@ fun AuthScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val credentialManager = remember(context) {
+        try {
+            CredentialManager.create(context)
+        } catch (_: Throwable) {
+            null
+        }
+    }
 
     var isLoading by remember { mutableStateOf(false) }
     var isCheckingAuto by remember { mutableStateOf(true) }
@@ -107,9 +113,9 @@ fun AuthScreen(
         Column(
             modifier = Modifier
                 .widthIn(max = 540.dp)
-                .fillMaxSize()
+                .fillMaxWidth()
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Column {
                 // Hero Artwork Card
