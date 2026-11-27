@@ -230,8 +230,13 @@ fun AuthScreen(
                                 errorMessage = msg
                             },
                             scope = scope,
-                            onAuthCancelled = {
+                            onAuthCancelled = { detail ->
                                 isLoading = false
+                                errorMessage = if (!detail.isNullOrBlank()) {
+                                    "Google Sign-In closed before completing ($detail). If this happens right after selecting an account, ensure the APK is signed with debug.keystore.base64 or its SHA-1 is registered in Firebase."
+                                } else {
+                                    "Google Sign-In was cancelled. If selecting an account closes without signing in, verify the APK signing SHA-1 matches Firebase."
+                                }
                             }
                         )
                     },
