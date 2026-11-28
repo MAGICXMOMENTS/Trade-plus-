@@ -6,8 +6,12 @@ import com.example.data.model.IndicatorSignalItem
 import com.example.data.model.OhlcvBar
 import com.example.data.model.PivotLevels
 import com.example.data.model.SignalTier
+import com.example.data.model.SmartMoneyZone
+import com.example.data.model.SmartMoneyZoneType
 import com.example.data.model.TechnicalAnalysisResult
 import com.example.data.model.TradingViewQuote
+import com.example.data.model.VolumeProfileBin
+import com.example.data.model.VolumeProfileResult
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -51,6 +55,9 @@ object TechnicalIndicatorEngine {
         val cciSeries = cciSeries(bars, 20)
         val williamsSeries = williamsRSeries(bars, 14)
         val obvSeries = obvSeries(bars)
+        val (tenkanSeries, kijunSeries, senkouASeries, senkouBSeries) = ichimokuSeries(bars)
+        val (squeezeMomSeries, squeezeOnSeries) = squeezeMomentumSeries(bars)
+        val smartMoneyZones = detectSmartMoneyZones(bars, atrSeries)
 
         val rsi14 = rsiSeries.lastOrNull { it != null } ?: tvQuote?.tvRsi ?: 50.0
         val macd = macdSeries.lastOrNull { it != null } ?: tvQuote?.tvMacd ?: 0.0
@@ -286,6 +293,44 @@ object TechnicalIndicatorEngine {
             )
         )
 
+        // 13. Ichimoku Kumo Cloud (PRO)
+        val lastSenA = senkouASeries.lastOrNull { it != null }
+        val lastSenB = senkouBSeries.lastOrNull { it != null }
+        val kumoBullish = lastSenA != null && lastSenB != null && currentPrice > maxOf(lastSenA, lastSenB)
+        val kumoBearish = lastSenA != null && lastSenB != null && currentPrice < minOf(lastSenA, lastSenB)
+        breakdown.add(
+            IndicatorSignalItem(
+                name = "Ichimoku Cloud (PRO)",
+                valueFormatted = if (lastSenA != null && lastSenB != null) {
+                    "$currencySymbol${String.format(Locale.US, "%.2f", (lastSenA + lastSenB) / 2.0)}"
+                } else "Warmup",
+                stance = when {
+                    kumoBullish -> "Above Bullish Kumo"
+                    kumoBearish -> "Below Bearish Kumo"
+                    lastSenA != null -> "Inside Cloud Consolidation"
+                    else -> "Collecting Bars"
+                },
+                bullish = if (kumoBullish) true else if (kumoBearish) false else null
+            )
+        )
+
+        // 14. TTM Squeeze Momentum (PRO)
+        val lastSqzMom = squeezeMomSeries.lastOrNull { it != null }
+        val lastSqzOn = squeezeOnSeries.lastOrNull { it != null }
+        breakdown.add(
+            IndicatorSignalItem(
+                name = "TTM Squeeze (PRO)",
+                valueFormatted = lastSqzMom?.let { String.format(Locale.US, "%+.2f", it) } ?: "0.00",
+                stance = when {
+                    lastSqzOn == true -> "Volatility Squeeze Coiling"
+                    lastSqzMom != null && lastSqzMom > 0 -> "Squeeze Fired Bullish"
+                    lastSqzMom != null && lastSqzMom < 0 -> "Squeeze Fired Bearish"
+                    else -> "Neutral Compression"
+                },
+                bullish = if (lastSqzOn == true) null else lastSqzMom?.let { it > 0.0 }
+            )
+        )
+
         val finalScore = score.toInt().coerceIn(-100, 100)
         val tier = when {
             finalScore >= 40 -> SignalTier.STRONG_BUY
@@ -366,6 +411,13 @@ object TechnicalIndicatorEngine {
             stochKSeries = stochKSeries,
             stochDSeries = stochDSeries,
             mfiSeries = mfiSeries,
+            ichimokuTenkanSeries = tenkanSeries,
+            ichimokuKijunSeries = kijunSeries,
+            ichimokuSenkouASeries = senkouASeries,
+            ichimokuSenkouBSeries = senkouBSeries,
+            squeezeMomentumSeries = squeezeMomSeries,
+            squeezeOnSeries = squeezeOnSeries,
+            smartMoneyZones = smartMoneyZones,
             tradeMarkers = tradeMarkers,
             entryZoneLow = entryLow,
             entryZoneHigh = entryHigh,
@@ -855,6 +907,259 @@ object TechnicalIndicatorEngine {
             }
         }
         return markers
+    }
+
+    data class IchimokuData(
+        val tenkan: List<Double?>,
+        val kijun: List<Double?>,
+        val senkouA: List<Double?>,
+        val senkouB: List<Double?>
+    )
+
+    fun ichimokuSeries(bars: List<OhlcvBar>): IchimokuData {
+        val n = bars.size
+        val tenkan = MutableList<Double?>(n) { null }
+        val kijun = MutableList<Double?>(n) { null }
+        val senkouA = MutableList<Double?>(n) { null }
+        val senkouB = MutableList<Double?>(n) { null }
+        if (n < 9) return IchimokuData(tenkan, kijun, senkouA, senkouB)
+
+        fun midpoint(endIdx: Int, period: Int): Double? {
+            if (endIdx < period - 1) return null
+            var hi = Double.NEGATIVE_INFINITY
+            var lo = Double.MAX_VALUE
+            for (j in (endIdx - period + 1)..endIdx) {
+                if (bars[j].high > hi) hi = bars[j].high
+                if (bars[j].low < lo) lo = bars[j].low
+            }
+            return (hi + lo) / 2.0
+        }
+
+        val kijunPeriod = min(26, max(12, n / 3))
+        val spanBPeriod = min(52, max(20, (n * 2) / 3))
+        val shift = if (n >= 64) 26 else max(4, n / 6)
+
+        val spanBRaw = MutableList<Double?>(n) { null }
+        for (i in bars.indices) {
+            tenkan[i] = midpoint(i, 9)
+            kijun[i] = midpoint(i, kijunPeriod)
+            spanBRaw[i] = midpoint(i, spanBPeriod)
+        }
+
+        for (i in bars.indices) {
+            val src = i - shift
+            if (src >= 0) {
+                val t = tenkan[src]
+                val k = kijun[src]
+                if (t != null && k != null) {
+                    senkouA[i] = (t + k) / 2.0
+                }
+                senkouB[i] = spanBRaw[src]
+            }
+        }
+        return IchimokuData(tenkan, kijun, senkouA, senkouB)
+    }
+
+    fun squeezeMomentumSeries(
+        bars: List<OhlcvBar>,
+        length: Int = 20,
+        bbMult: Double = 2.0,
+        kcMult: Double = 1.5
+    ): Pair<List<Double?>, List<Boolean?>> {
+        val n = bars.size
+        val momentum = MutableList<Double?>(n) { null }
+        val squeezeOn = MutableList<Boolean?>(n) { null }
+        if (n < length) return momentum to squeezeOn
+
+        val closes = bars.map { it.close }
+        val sma = smaSeries(closes, length)
+        val (bbUpper, _, bbLower) = bollingerSeries(closes, length, bbMult)
+        val atr = atrSeries(bars, length)
+
+        val rawDelta = MutableList<Double?>(n) { null }
+        for (i in (length - 1) until n) {
+            val m = sma[i] ?: continue
+            val bU = bbUpper[i]
+            val bL = bbLower[i]
+            val a = atr[i]
+            if (bU != null && bL != null && a != null) {
+                val kcU = m + kcMult * a
+                val kcL = m - kcMult * a
+                squeezeOn[i] = bL > kcL && bU < kcU
+            }
+            var hi = Double.NEGATIVE_INFINITY
+            var lo = Double.MAX_VALUE
+            for (j in (i - length + 1)..i) {
+                if (bars[j].high > hi) hi = bars[j].high
+                if (bars[j].low < lo) lo = bars[j].low
+            }
+            val midline = (((hi + lo) / 2.0) + m) / 2.0
+            rawDelta[i] = closes[i] - midline
+        }
+
+        // Linear regression smoothing (length-window endpoint)
+        for (i in (length - 1) until n) {
+            val window = (i - length + 1..i).mapNotNull { rawDelta[it] }
+            if (window.size < 4) {
+                momentum[i] = rawDelta[i]
+                continue
+            }
+            val k = window.size
+            val meanX = (k - 1) / 2.0
+            val meanY = window.average()
+            var sxx = 0.0
+            var sxy = 0.0
+            for (idx in window.indices) {
+                val dx = idx - meanX
+                sxx += dx * dx
+                sxy += dx * (window[idx] - meanY)
+            }
+            val slope = if (sxx > 0.0) sxy / sxx else 0.0
+            val intercept = meanY - slope * meanX
+            momentum[i] = intercept + slope * (k - 1)
+        }
+        return momentum to squeezeOn
+    }
+
+    fun detectSmartMoneyZones(
+        bars: List<OhlcvBar>,
+        atrSeries: List<Double?>
+    ): List<SmartMoneyZone> {
+        if (bars.size < 6) return emptyList()
+        val zones = mutableListOf<SmartMoneyZone>()
+        val lastIdx = bars.lastIndex
+        val fallbackAtr = ((bars.maxOf { it.high } - bars.minOf { it.low }) / 20.0).coerceAtLeast(0.01)
+
+        // 1. Fair Value Gaps (3-candle institutional imbalances)
+        for (i in 2..lastIdx) {
+            val atr = atrSeries.getOrNull(i) ?: fallbackAtr
+            val bullGap = bars[i].low - bars[i - 2].high
+            if (bullGap >= atr * 0.18) {
+                zones.add(
+                    SmartMoneyZone(
+                        startBarIndex = i - 1,
+                        endBarIndex = lastIdx,
+                        lowPrice = bars[i - 2].high,
+                        highPrice = bars[i].low,
+                        isBullish = true,
+                        type = SmartMoneyZoneType.BULLISH_FVG
+                    )
+                )
+            }
+            val bearGap = bars[i - 2].low - bars[i].high
+            if (bearGap >= atr * 0.18) {
+                zones.add(
+                    SmartMoneyZone(
+                        startBarIndex = i - 1,
+                        endBarIndex = lastIdx,
+                        lowPrice = bars[i].high,
+                        highPrice = bars[i - 2].low,
+                        isBullish = false,
+                        type = SmartMoneyZoneType.BEARISH_FVG
+                    )
+                )
+            }
+        }
+
+        // 2. Order Blocks (last opposing candle prior to >= 1.5*ATR impulse)
+        for (i in 1..(lastIdx - 2)) {
+            val atr = atrSeries.getOrNull(i) ?: fallbackAtr
+            val prev = bars[i]
+            val impulseUp = bars[i + 2].close - prev.high
+            if (prev.close < prev.open && impulseUp >= atr * 1.45) {
+                zones.add(
+                    SmartMoneyZone(
+                        startBarIndex = i,
+                        endBarIndex = lastIdx,
+                        lowPrice = prev.low,
+                        highPrice = prev.open,
+                        isBullish = true,
+                        type = SmartMoneyZoneType.BULLISH_OB
+                    )
+                )
+            }
+            val impulseDown = prev.low - bars[i + 2].close
+            if (prev.close > prev.open && impulseDown >= atr * 1.45) {
+                zones.add(
+                    SmartMoneyZone(
+                        startBarIndex = i,
+                        endBarIndex = lastIdx,
+                        lowPrice = prev.open,
+                        highPrice = prev.high,
+                        isBullish = false,
+                        type = SmartMoneyZoneType.BEARISH_OB
+                    )
+                )
+            }
+        }
+
+        // Prioritize most recent relevant zones to keep the chart crisp
+        return zones.sortedByDescending { it.startBarIndex }.take(6)
+    }
+
+    fun computeVolumeProfile(
+        bars: List<OhlcvBar>,
+        binCount: Int = 24
+    ): VolumeProfileResult? {
+        if (bars.isEmpty() || binCount <= 0) return null
+        val minLow = bars.minOf { it.low }
+        val maxHigh = bars.maxOf { it.high }
+        val span = (maxHigh - minLow).coerceAtLeast(0.0001)
+        val step = span / binCount
+
+        val bullBuckets = DoubleArray(binCount)
+        val bearBuckets = DoubleArray(binCount)
+
+        for (bar in bars) {
+            val vol = bar.volume.toDouble().coerceAtLeast(1.0)
+            val isBull = bar.close >= bar.open
+            val loIdx = (((bar.low - minLow) / span) * binCount).toInt().coerceIn(0, binCount - 1)
+            val hiIdx = (((bar.high - minLow) / span) * binCount).toInt().coerceIn(loIdx, binCount - 1)
+            val spread = (hiIdx - loIdx + 1).toDouble()
+            val perBin = vol / spread
+            for (b in loIdx..hiIdx) {
+                if (isBull) bullBuckets[b] += perBin else bearBuckets[b] += perBin
+            }
+        }
+
+        val bins = (0 until binCount).map { idx ->
+            VolumeProfileBin(
+                lowPrice = minLow + idx * step,
+                highPrice = minLow + (idx + 1) * step,
+                bullVolume = bullBuckets[idx],
+                bearVolume = bearBuckets[idx]
+            )
+        }
+        val pocIdx = bins.indices.maxByOrNull { bins[it].totalVolume } ?: 0
+        val maxVol = bins[pocIdx].totalVolume.coerceAtLeast(1.0)
+        val pocPrice = (bins[pocIdx].lowPrice + bins[pocIdx].highPrice) / 2.0
+
+        val totalVol = bins.sumOf { it.totalVolume }.coerceAtLeast(1.0)
+        val targetVol = totalVol * 0.70
+        var accumulated = bins[pocIdx].totalVolume
+        var loPtr = pocIdx
+        var hiPtr = pocIdx
+        while (accumulated < targetVol && (loPtr > 0 || hiPtr < bins.lastIndex)) {
+            val downVol = if (loPtr > 0) bins[loPtr - 1].totalVolume else -1.0
+            val upVol = if (hiPtr < bins.lastIndex) bins[hiPtr + 1].totalVolume else -1.0
+            if (upVol >= downVol && hiPtr < bins.lastIndex) {
+                hiPtr++
+                accumulated += bins[hiPtr].totalVolume
+            } else if (loPtr > 0) {
+                loPtr--
+                accumulated += bins[loPtr].totalVolume
+            } else {
+                break
+            }
+        }
+
+        return VolumeProfileResult(
+            bins = bins,
+            pocPrice = pocPrice,
+            vahPrice = bins[hiPtr].highPrice,
+            valPrice = bins[loPtr].lowPrice,
+            maxBucketVolume = maxVol
+        )
     }
 }
 

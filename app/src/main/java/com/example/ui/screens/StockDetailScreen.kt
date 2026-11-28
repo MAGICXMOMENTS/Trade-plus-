@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -47,6 +49,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,11 +68,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.AiForecastResult
 import com.example.data.model.ChartTimeframe
 import com.example.data.model.OscillatorType
+import com.example.data.model.TimeframeCategory
 import com.example.data.model.UiState
 import com.example.data.remote.currencyFor
 import com.example.quant.StrongPredictionResult
 import com.example.quant.TradeSuggestion
 import com.example.ui.components.AddRiskAlertDialog
+import com.example.ui.components.CompactMultiAiComparisonStrip
 import com.example.ui.components.ErrorCard
 import com.example.ui.components.InteractivePositionCalculatorCard
 import com.example.ui.components.KeyLevelsAndPivotsCard
@@ -91,11 +96,14 @@ import com.example.ui.theme.MonoNumericMedium
 import com.example.ui.theme.MonoNumericSmall
 import com.example.ui.theme.ObsidianBg
 import com.example.ui.theme.RiskAmber
+import com.example.ui.theme.RiskAmberDim
 import com.example.ui.theme.TerminalBorder
 import com.example.ui.theme.TerminalSurface
 import com.example.ui.theme.TerminalSurfaceElevated
+import com.example.ui.theme.TerminalSurfaceHighest
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.VwapViolet
 import com.example.ui.viewmodel.TradePulseViewModel
 import com.example.worker.AlertMonitorScheduler
 import java.text.SimpleDateFormat
@@ -117,15 +125,28 @@ fun StockDetailScreen(
     val forecastState by viewModel.aiForecastState.collectAsStateWithLifecycle()
     val watchlistUi by viewModel.watchlistState.collectAsStateWithLifecycle()
     val riskProfile by viewModel.riskProfileState.collectAsStateWithLifecycle()
+    val isLiveStreaming by viewModel.isLiveChartEnabled.collectAsStateWithLifecycle()
+    val lastUpdatedMs by viewModel.lastChartUpdatedMs.collectAsStateWithLifecycle()
 
+    DisposableEffect(Unit) {
+        viewModel.startLiveChartStream()
+        onDispose { viewModel.stopLiveChartStream() }
+    }
+
+    var selectedCategory by remember { mutableStateOf(TimeframeCategory.ALL) }
     var selectedOscillator by remember { mutableStateOf(OscillatorType.RSI) }
     var showBollinger by remember { mutableStateOf(true) }
     var showVwap by remember { mutableStateOf(true) }
     var showSupertrend by remember { mutableStateOf(true) }
     var showFibonacci by remember { mutableStateOf(false) }
+    var showVolumeProfile by remember { mutableStateOf(true) }
+    var showIchimoku by remember { mutableStateOf(false) }
+    var showSmartMoney by remember { mutableStateOf(false) }
     var showBuySellMarkers by remember { mutableStateOf(true) }
     var showFullChart by remember { mutableStateOf(false) }
     var selectedChartBarIdx by remember(selectedSymbol, selectedTimeframe) { mutableStateOf<Int?>(null) }
+    var chartVisibleStart by remember(selectedSymbol, selectedTimeframe) { mutableStateOf(0) }
+    var chartVisibleCount by remember(selectedSymbol, selectedTimeframe) { mutableStateOf<Int?>(null) }
 
     var customPrefillAlertStop by remember { mutableStateOf<Double?>(null) }
     var showAlertDialog by remember { mutableStateOf(false) }
@@ -193,27 +214,16 @@ fun StockDetailScreen(
                 }
             }
 
-            // Timeframe selector
+            // Timeframe selector grouped by trading use-case
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ChartTimeframe.entries.forEach { tf ->
-                        FilterChip(
-                            selected = selectedTimeframe == tf,
-                            onClick = { viewModel.selectTimeframe(tf) },
-                            label = { Text(tf.label) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = AiCyanDim,
-                                selectedLabelColor = AiCyan
-                            ),
-                            modifier = Modifier.testTag("timeframe_${tf.name.lowercase()}")
-                        )
+                TimeframeUseCaseSelector(
+                    selectedCategory = selectedCategory,
+                    selectedTimeframe = selectedTimeframe,
+                    onSelectCategory = { selectedCategory = it },
+                    onSelectTimeframe = { tf ->
+                        viewModel.selectTimeframe(tf)
                     }
-                }
+                )
             }
 
             when (val state = intelState) {
@@ -307,7 +317,7 @@ fun StockDetailScreen(
                         )
                     }
 
-                    // Interactive Price Candlestick Chart (Tap expand icon to open Full Screen)
+                    // Interactive Price Candlestick Chart (Swipeable, Pinch-Zoomable, Live & Expandable)
                     item {
                         PriceCandlestickChart(
                             bars = bundle.bars,
@@ -319,90 +329,54 @@ fun StockDetailScreen(
                             showVwap = showVwap,
                             showSupertrend = showSupertrend,
                             showFibonacci = showFibonacci,
+                            showIchimoku = showIchimoku,
+                            showVolumeProfile = showVolumeProfile,
+                            showSmartMoney = showSmartMoney,
                             showBuySellMarkers = showBuySellMarkers,
                             showTradeLevels = true,
+                            isLiveStreaming = isLiveStreaming,
+                            lastUpdatedMs = lastUpdatedMs,
+                            onToggleLiveStreaming = { viewModel.toggleLiveChart() },
+                            onManualRefresh = { viewModel.loadStockIntelligence(forceRefresh = true) },
                             selectedIndex = selectedChartBarIdx,
                             onSelectedIndexChange = { selectedChartBarIdx = it },
+                            onViewportChanged = { start, count ->
+                                chartVisibleStart = start
+                                chartVisibleCount = count
+                            },
                             onOpenFullChart = { showFullChart = true }
                         )
                     }
 
-                    // Chart Overlay & Oscillator Switcher Chips
+                    // Chart Standard Overlays, PRO Paid-Tier Indicators & Oscillator Switcher
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                FilterChip(
-                                    selected = showBuySellMarkers,
-                                    onClick = { showBuySellMarkers = !showBuySellMarkers },
-                                    label = { Text("Buy/Sell Marks") },
-                                    modifier = Modifier.testTag("toggle_buy_sell_markers"),
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = BullEmeraldDim,
-                                        selectedLabelColor = BullEmerald
-                                    )
-                                )
-                                FilterChip(
-                                    selected = showSupertrend,
-                                    onClick = { showSupertrend = !showSupertrend },
-                                    label = { Text("Supertrend") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = AiCyanDim,
-                                        selectedLabelColor = AiCyan
-                                    )
-                                )
-                                FilterChip(
-                                    selected = showVwap,
-                                    onClick = { showVwap = !showVwap },
-                                    label = { Text("VWAP") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = AiCyanDim,
-                                        selectedLabelColor = AiCyan
-                                    )
-                                )
-                                FilterChip(
-                                    selected = showBollinger,
-                                    onClick = { showBollinger = !showBollinger },
-                                    label = { Text("Bollinger") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = AiCyanDim,
-                                        selectedLabelColor = AiCyan
-                                    )
-                                )
-                                FilterChip(
-                                    selected = showFibonacci,
-                                    onClick = { showFibonacci = !showFibonacci },
-                                    label = { Text("Fib Levels") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = AiCyanDim,
-                                        selectedLabelColor = AiCyan
-                                    )
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OscillatorType.entries.forEach { osc ->
-                                    FilterChip(
-                                        selected = selectedOscillator == osc,
-                                        onClick = { selectedOscillator = osc },
-                                        label = { Text(osc.label) },
-                                        modifier = Modifier.testTag("osc_${osc.name.lowercase()}")
-                                    )
-                                }
-                            }
+                            ChartOverlaySelectorRows(
+                                showBuySellMarkers = showBuySellMarkers,
+                                onToggleBuySell = { showBuySellMarkers = !showBuySellMarkers },
+                                showSupertrend = showSupertrend,
+                                onToggleSupertrend = { showSupertrend = !showSupertrend },
+                                showVwap = showVwap,
+                                onToggleVwap = { showVwap = !showVwap },
+                                showBollinger = showBollinger,
+                                onToggleBollinger = { showBollinger = !showBollinger },
+                                showFibonacci = showFibonacci,
+                                onToggleFibonacci = { showFibonacci = !showFibonacci },
+                                showVolumeProfile = showVolumeProfile,
+                                onToggleVolumeProfile = { showVolumeProfile = !showVolumeProfile },
+                                showIchimoku = showIchimoku,
+                                onToggleIchimoku = { showIchimoku = !showIchimoku },
+                                showSmartMoney = showSmartMoney,
+                                onToggleSmartMoney = { showSmartMoney = !showSmartMoney },
+                                selectedOscillator = selectedOscillator,
+                                onSelectOscillator = { selectedOscillator = it }
+                            )
                             OscillatorSubChart(
                                 technicals = tech,
                                 oscillatorType = selectedOscillator,
                                 hasForecastGap = true,
+                                visibleStartIndex = chartVisibleStart,
+                                visibleCount = chartVisibleCount,
                                 selectedIndex = selectedChartBarIdx
                             )
                         }
@@ -592,7 +566,7 @@ fun StockDetailScreen(
 
         Dialog(
             onDismissRequest = { showFullChart = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
             Surface(
                 color = ObsidianBg,
@@ -601,25 +575,27 @@ fun StockDetailScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(16.dp)
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
                         .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "${q.symbol} • ${q.exchange.ifBlank { "US" }}",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "$currency${fmt(q.price)}  •  SL $currency${fmt(tech.stopLossLevel)}",
+                                text = "$currency${fmt(q.price)} (${String.format(Locale.US, "%+.2f%%", q.changePct)})  •  SL $currency${fmt(tech.stopLossLevel)}",
                                 style = MonoNumericSmall,
-                                color = BearCoral
+                                color = if (q.changePct >= 0.0) BullEmerald else BearCoral
                             )
                         }
                         Row(
@@ -639,12 +615,81 @@ fun StockDetailScreen(
                             }
                             IconButton(
                                 onClick = { showFullChart = false },
-                                modifier = Modifier.testTag("close_full_chart_button")
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("close_full_chart_button")
                             ) {
                                 Icon(Icons.Filled.Close, contentDescription = "Close Full Chart")
                             }
                         }
                     }
+
+                    TimeframeUseCaseSelector(
+                        selectedCategory = selectedCategory,
+                        selectedTimeframe = selectedTimeframe,
+                        onSelectCategory = { selectedCategory = it },
+                        onSelectTimeframe = { tf ->
+                            viewModel.selectTimeframe(tf)
+                        }
+                    )
+
+                    PriceCandlestickChart(
+                        bars = currentSuccess.bars,
+                        technicals = tech,
+                        currencySymbol = currency,
+                        timeframe = currentSuccess.timeframe,
+                        predictedUp = predictedUp,
+                        showBollinger = showBollinger,
+                        showVwap = showVwap,
+                        showSupertrend = showSupertrend,
+                        showFibonacci = showFibonacci,
+                        showIchimoku = showIchimoku,
+                        showVolumeProfile = showVolumeProfile,
+                        showSmartMoney = showSmartMoney,
+                        showBuySellMarkers = showBuySellMarkers,
+                        showTradeLevels = true,
+                        isLiveStreaming = isLiveStreaming,
+                        lastUpdatedMs = lastUpdatedMs,
+                        onToggleLiveStreaming = { viewModel.toggleLiveChart() },
+                        onManualRefresh = { viewModel.loadStockIntelligence(forceRefresh = true) },
+                        selectedIndex = selectedChartBarIdx,
+                        onSelectedIndexChange = { selectedChartBarIdx = it },
+                        onViewportChanged = { start, count ->
+                            chartVisibleStart = start
+                            chartVisibleCount = count
+                        },
+                        chartHeight = 360.dp
+                    )
+
+                    ChartOverlaySelectorRows(
+                        showBuySellMarkers = showBuySellMarkers,
+                        onToggleBuySell = { showBuySellMarkers = !showBuySellMarkers },
+                        showSupertrend = showSupertrend,
+                        onToggleSupertrend = { showSupertrend = !showSupertrend },
+                        showVwap = showVwap,
+                        onToggleVwap = { showVwap = !showVwap },
+                        showBollinger = showBollinger,
+                        onToggleBollinger = { showBollinger = !showBollinger },
+                        showFibonacci = showFibonacci,
+                        onToggleFibonacci = { showFibonacci = !showFibonacci },
+                        showVolumeProfile = showVolumeProfile,
+                        onToggleVolumeProfile = { showVolumeProfile = !showVolumeProfile },
+                        showIchimoku = showIchimoku,
+                        onToggleIchimoku = { showIchimoku = !showIchimoku },
+                        showSmartMoney = showSmartMoney,
+                        onToggleSmartMoney = { showSmartMoney = !showSmartMoney },
+                        selectedOscillator = selectedOscillator,
+                        onSelectOscillator = { selectedOscillator = it }
+                    )
+
+                    OscillatorSubChart(
+                        technicals = tech,
+                        oscillatorType = selectedOscillator,
+                        hasForecastGap = true,
+                        visibleStartIndex = chartVisibleStart,
+                        visibleCount = chartVisibleCount,
+                        selectedIndex = selectedChartBarIdx
+                    )
 
                     // Buy/Sell timing & Stop-Loss strip inside Full Chart
                     Column(
@@ -666,92 +711,6 @@ fun StockDetailScreen(
                             color = RiskAmber
                         )
                     }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ChartTimeframe.entries.forEach { tf ->
-                            FilterChip(
-                                selected = selectedTimeframe == tf,
-                                onClick = { viewModel.selectTimeframe(tf) },
-                                label = { Text(tf.label) }
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilterChip(
-                            selected = showBuySellMarkers,
-                            onClick = { showBuySellMarkers = !showBuySellMarkers },
-                            label = { Text("Buy/Sell Marks") }
-                        )
-                        FilterChip(
-                            selected = showSupertrend,
-                            onClick = { showSupertrend = !showSupertrend },
-                            label = { Text("Supertrend") }
-                        )
-                        FilterChip(
-                            selected = showVwap,
-                            onClick = { showVwap = !showVwap },
-                            label = { Text("VWAP") }
-                        )
-                        FilterChip(
-                            selected = showBollinger,
-                            onClick = { showBollinger = !showBollinger },
-                            label = { Text("Bollinger") }
-                        )
-                        FilterChip(
-                            selected = showFibonacci,
-                            onClick = { showFibonacci = !showFibonacci },
-                            label = { Text("Fib Levels") }
-                        )
-                    }
-
-                    PriceCandlestickChart(
-                        bars = currentSuccess.bars,
-                        technicals = tech,
-                        currencySymbol = currency,
-                        timeframe = currentSuccess.timeframe,
-                        predictedUp = predictedUp,
-                        showBollinger = showBollinger,
-                        showVwap = showVwap,
-                        showSupertrend = showSupertrend,
-                        showFibonacci = showFibonacci,
-                        showBuySellMarkers = showBuySellMarkers,
-                        showTradeLevels = true,
-                        selectedIndex = selectedChartBarIdx,
-                        onSelectedIndexChange = { selectedChartBarIdx = it },
-                        chartHeight = 330.dp
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OscillatorType.entries.forEach { osc ->
-                            FilterChip(
-                                selected = selectedOscillator == osc,
-                                onClick = { selectedOscillator = osc },
-                                label = { Text(osc.label) }
-                            )
-                        }
-                    }
-                    OscillatorSubChart(
-                        technicals = tech,
-                        oscillatorType = selectedOscillator,
-                        hasForecastGap = true,
-                        selectedIndex = selectedChartBarIdx
-                    )
                 }
             }
         }
@@ -986,7 +945,11 @@ private fun DirectionPredictionCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (aiForecast != null) "AI Forecast: ${aiForecast.shortTermBias} (${aiForecast.confidencePercent}%)" else "Tap AI Verify for AI macro & thesis check",
+                    text = if (aiForecast != null) {
+                        "Multi-AI Consensus: ${aiForecast.consensusVerdict.ifBlank { aiForecast.shortTermBias }} (${aiForecast.confidencePercent}%)"
+                    } else {
+                        "Run Multi-AI to compare specialist models & show one unified result"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                     modifier = Modifier.weight(1f)
@@ -1003,9 +966,17 @@ private fun DirectionPredictionCard(
                     } else {
                         Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = AiCyan, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.size(4.dp))
-                        Text("AI Verify", color = AiCyan, style = MaterialTheme.typography.labelMedium)
+                        Text(if (aiForecast != null) "Re-Run AIs" else "Multi-AI Verify", color = AiCyan, style = MaterialTheme.typography.labelMedium)
                     }
                 }
+            }
+
+            if (aiForecast != null) {
+                CompactMultiAiComparisonStrip(
+                    forecast = aiForecast,
+                    currencySymbol = currency,
+                    currentPrice = currentPrice
+                )
             }
 
             if (!aiError.isNullOrBlank()) {
@@ -1153,6 +1124,219 @@ private fun TradeLevelBox(
     ) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = TextMuted)
         Text(value, style = MonoNumericMedium, color = color)
+    }
+}
+
+@Composable
+private fun TimeframeUseCaseSelector(
+    selectedCategory: TimeframeCategory,
+    selectedTimeframe: ChartTimeframe,
+    onSelectCategory: (TimeframeCategory) -> Unit,
+    onSelectTimeframe: (ChartTimeframe) -> Unit
+) {
+    val visibleTimeframes = remember(selectedCategory, selectedTimeframe) {
+        if (selectedCategory == TimeframeCategory.ALL) {
+            ChartTimeframe.entries
+        } else {
+            ChartTimeframe.entries.filter { it.category == selectedCategory || it == selectedTimeframe }
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TimeframeCategory.entries.forEach { cat ->
+                FilterChip(
+                    selected = selectedCategory == cat,
+                    onClick = { onSelectCategory(cat) },
+                    label = { Text(cat.label, style = MaterialTheme.typography.labelSmall) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = TerminalSurfaceHighest,
+                        selectedLabelColor = AiCyan
+                    ),
+                    modifier = Modifier.testTag("tf_category_${cat.name.lowercase()}")
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            visibleTimeframes.forEach { tf ->
+                FilterChip(
+                    selected = selectedTimeframe == tf,
+                    onClick = { onSelectTimeframe(tf) },
+                    label = { Text(tf.label) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AiCyanDim,
+                        selectedLabelColor = AiCyan
+                    ),
+                    modifier = Modifier.testTag("timeframe_${tf.name.lowercase()}")
+                )
+            }
+        }
+
+        Text(
+            text = "${selectedTimeframe.category.label}: ${selectedTimeframe.useCase} • Poll ${selectedTimeframe.refreshIntervalMs / 1000}s",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary
+        )
+    }
+}
+
+@Composable
+private fun ChartOverlaySelectorRows(
+    showBuySellMarkers: Boolean,
+    onToggleBuySell: () -> Unit,
+    showSupertrend: Boolean,
+    onToggleSupertrend: () -> Unit,
+    showVwap: Boolean,
+    onToggleVwap: () -> Unit,
+    showBollinger: Boolean,
+    onToggleBollinger: () -> Unit,
+    showFibonacci: Boolean,
+    onToggleFibonacci: () -> Unit,
+    showVolumeProfile: Boolean,
+    onToggleVolumeProfile: () -> Unit,
+    showIchimoku: Boolean,
+    onToggleIchimoku: () -> Unit,
+    showSmartMoney: Boolean,
+    onToggleSmartMoney: () -> Unit,
+    selectedOscillator: OscillatorType,
+    onSelectOscillator: (OscillatorType) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Standard Overlays
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = showBuySellMarkers,
+                onClick = onToggleBuySell,
+                label = { Text("Buy/Sell Marks") },
+                modifier = Modifier.testTag("toggle_buy_sell_markers"),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = BullEmeraldDim,
+                    selectedLabelColor = BullEmerald
+                )
+            )
+            FilterChip(
+                selected = showSupertrend,
+                onClick = onToggleSupertrend,
+                label = { Text("Supertrend") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AiCyanDim,
+                    selectedLabelColor = AiCyan
+                )
+            )
+            FilterChip(
+                selected = showVwap,
+                onClick = onToggleVwap,
+                label = { Text("VWAP") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AiCyanDim,
+                    selectedLabelColor = AiCyan
+                )
+            )
+            FilterChip(
+                selected = showBollinger,
+                onClick = onToggleBollinger,
+                label = { Text("Bollinger") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AiCyanDim,
+                    selectedLabelColor = AiCyan
+                )
+            )
+            FilterChip(
+                selected = showFibonacci,
+                onClick = onToggleFibonacci,
+                label = { Text("Fib Levels") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AiCyanDim,
+                    selectedLabelColor = AiCyan
+                )
+            )
+        }
+
+        // Premium Paid-Tier ("PRO") Indicators
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilterChip(
+                selected = showVolumeProfile,
+                onClick = onToggleVolumeProfile,
+                label = { Text("PRO: Volume Profile") },
+                modifier = Modifier.testTag("toggle_pro_vpvr"),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = RiskAmberDim,
+                    selectedLabelColor = RiskAmber
+                )
+            )
+            FilterChip(
+                selected = showIchimoku,
+                onClick = onToggleIchimoku,
+                label = { Text("PRO: Ichimoku Cloud") },
+                modifier = Modifier.testTag("toggle_pro_ichimoku"),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = RiskAmberDim,
+                    selectedLabelColor = RiskAmber
+                )
+            )
+            FilterChip(
+                selected = showSmartMoney,
+                onClick = onToggleSmartMoney,
+                label = { Text("PRO: Smart Money FVG/OB") },
+                modifier = Modifier.testTag("toggle_pro_smc"),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = RiskAmberDim,
+                    selectedLabelColor = RiskAmber
+                )
+            )
+        }
+
+        // Sub-Chart Oscillators
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OscillatorType.entries.forEach { osc ->
+                val colors = if (osc.isPremium) {
+                    FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = RiskAmberDim,
+                        selectedLabelColor = RiskAmber
+                    )
+                } else {
+                    FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AiCyanDim,
+                        selectedLabelColor = AiCyan
+                    )
+                }
+                FilterChip(
+                    selected = selectedOscillator == osc,
+                    onClick = { onSelectOscillator(osc) },
+                    label = { Text(osc.label) },
+                    colors = colors,
+                    modifier = Modifier.testTag("osc_${osc.name.lowercase()}")
+                )
+            }
+        }
     }
 }
 

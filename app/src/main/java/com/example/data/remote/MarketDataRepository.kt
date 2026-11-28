@@ -191,9 +191,10 @@ class MarketDataRepository {
         val cacheKey = "${cleanSymbol}_${exchange}_${timeframe.label}"
         val now = System.currentTimeMillis()
 
+        val chartTtlMs = if (timeframe.isIntraday) 4_000L else 60_000L
         val chartPayload = (
             if (!forceRefresh) {
-                chartCache[cacheKey]?.takeIf { now - it.first < 90_000L }?.second
+                chartCache[cacheKey]?.takeIf { now - it.first < chartTtlMs }?.second
             } else null
         ) ?: yahooApi.fetchHistoricalChart(cleanSymbol, exchange, timeframe).also {
             chartCache[cacheKey] = now to it
@@ -222,12 +223,14 @@ class MarketDataRepository {
             cleanSymbol.endsWith(".BO") -> "BSE"
             else -> quoteCache[cleanSymbol]?.exchange?.trim()?.uppercase().orEmpty()
         }
-        val scopedCached = if (targetEx.isNotBlank()) {
-            quoteCache["${lookupSym}_$targetEx"]
-                ?: quoteCache[cleanSymbol]?.takeIf { it.exchange.equals(targetEx, ignoreCase = true) }
-        } else {
-            quoteCache[cleanSymbol] ?: quoteCache[lookupSym]
-        }
+        val scopedCached = if (!forceRefresh) {
+            if (targetEx.isNotBlank()) {
+                quoteCache["${lookupSym}_$targetEx"]
+                    ?: quoteCache[cleanSymbol]?.takeIf { it.exchange.equals(targetEx, ignoreCase = true) }
+            } else {
+                quoteCache[cleanSymbol] ?: quoteCache[lookupSym]
+            }
+        } else null
 
         val rawTvQuote = try {
             val prefMap = if (targetEx.isNotBlank()) mapOf(lookupSym to targetEx) else emptyMap()

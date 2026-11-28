@@ -45,24 +45,52 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
                     yahooSymbol = candidate,
                     displaySymbol = symbol,
                     exchange = exchange,
-                    timeframe = timeframe,
-                    rangeOverride = null
+                    timeframe = timeframe
                 )
-                if (timeframe == ChartTimeframe.D1 && payload.bars.size < 6) {
-                    try {
-                        val twoDay = executeChartRequest(
-                            yahooSymbol = candidate,
-                            displaySymbol = symbol,
-                            exchange = exchange,
-                            timeframe = timeframe,
-                            rangeOverride = "2d"
-                        )
-                        if (twoDay.bars.size > payload.bars.size) {
-                            payload = twoDay.copy(bars = twoDay.bars.takeLast(78))
-                        }
-                    } catch (_: Exception) {
-                        // Keep initial D1 payload if 2d fallback fails
+                when {
+                    (timeframe == ChartTimeframe.D1 || timeframe == ChartTimeframe.MIN1) && payload.bars.size < 6 -> {
+                        try {
+                            val twoDay = executeChartRequest(
+                                yahooSymbol = candidate,
+                                displaySymbol = symbol,
+                                exchange = exchange,
+                                timeframe = timeframe,
+                                rangeOverride = "2d"
+                            )
+                            if (twoDay.bars.size > payload.bars.size) {
+                                val cap = if (timeframe == ChartTimeframe.MIN1) 390 else 78
+                                payload = twoDay.copy(bars = twoDay.bars.takeLast(cap))
+                            }
+                        } catch (_: Exception) { }
                     }
+                    timeframe == ChartTimeframe.YTD && payload.bars.size < 5 -> {
+                        try {
+                            val oneMo = executeChartRequest(
+                                yahooSymbol = candidate,
+                                displaySymbol = symbol,
+                                exchange = exchange,
+                                timeframe = timeframe,
+                                rangeOverride = "1mo"
+                            )
+                            if (oneMo.bars.size > payload.bars.size) payload = oneMo
+                        } catch (_: Exception) { }
+                    }
+                    timeframe == ChartTimeframe.MAX && payload.bars.size < 18 -> {
+                        try {
+                            val weekly = executeChartRequest(
+                                yahooSymbol = candidate,
+                                displaySymbol = symbol,
+                                exchange = exchange,
+                                timeframe = timeframe,
+                                rangeOverride = "max",
+                                intervalOverride = "1wk"
+                            )
+                            if (weekly.bars.size > payload.bars.size) payload = weekly
+                        } catch (_: Exception) { }
+                    }
+                }
+                if (timeframe.aggregateGroupSize > 1) {
+                    payload = payload.copy(bars = aggregateBars(payload.bars, timeframe.aggregateGroupSize))
                 }
                 return@withContext payload
             } catch (e: Exception) {
@@ -86,11 +114,13 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
         displaySymbol: String,
         exchange: String,
         timeframe: ChartTimeframe,
-        rangeOverride: String? = null
+        rangeOverride: String? = null,
+        intervalOverride: String? = null
     ): HistoricalChartPayload {
         val encoded = URLEncoder.encode(yahooSymbol, "UTF-8")
         val range = rangeOverride ?: timeframe.yahooRange
-        val url = "https://query1.finance.yahoo.com/v8/finance/chart/$encoded?range=$range&interval=${timeframe.yahooInterval}&includePrePost=false"
+        val interval = intervalOverride ?: timeframe.yahooInterval
+        val url = "https://query1.finance.yahoo.com/v8/finance/chart/$encoded?range=$range&interval=$interval&includePrePost=false"
 
         val request = Request.Builder()
             .url(url)
@@ -171,15 +201,32 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
                     )
                 }
             }
-            val bars = dedupedBars.values.sortedBy { it.timestampSec }
+            val rawBars = dedupedBars.values.sortedBy { it.timestampSec }
 
-            if (bars.isEmpty()) {
+            if (rawBars.isEmpty()) {
                 throw IllegalStateException("Historical bars empty for $yahooSymbol")
+            }
+
+            val resolvedPrice = if (regularPrice.isFinite() && regularPrice > 0.0) regularPrice else rawBars.last().close
+            val bars = if (timeframe.isIntraday && rawBars.isNotEmpty() && resolvedPrice > 0.0) {
+                val last = rawBars.last()
+                val drift = kotlin.math.abs(resolvedPrice - last.close) / last.close.coerceAtLeast(0.01)
+                if (drift in 0.00001..0.05) {
+                    rawBars.dropLast(1) + last.copy(
+                        close = resolvedPrice,
+                        high = maxOf(last.high, resolvedPrice),
+                        low = minOf(last.low, resolvedPrice)
+                    )
+                } else {
+                    rawBars
+                }
+            } else {
+                rawBars
             }
 
             HistoricalChartPayload(
                 symbol = displaySymbol.uppercase(),
-                regularMarketPrice = if (regularPrice.isFinite() && regularPrice > 0.0) regularPrice else bars.last().close,
+                regularMarketPrice = resolvedPrice,
                 previousClose = if (prevClose.isFinite() && prevClose > 0.0) prevClose else bars.first().open,
                 companyName = longName.ifBlank { displaySymbol },
                 exchangeName = exchangeName,
@@ -246,6 +293,42 @@ class YahooFinanceApiService(private val client: OkHttpClient) {
                 ex.isBlank() && clean in KNOWN_NSE_SYMBOLS -> "$clean.NS"
                 else -> base
             }
+        }
+
+        fun aggregateBars(bars: List<OhlcvBar>, groupSize: Int): List<OhlcvBar> {
+            if (groupSize <= 1 || bars.size <= 1) return bars
+            val result = mutableListOf<OhlcvBar>()
+            val bucket = mutableListOf<OhlcvBar>()
+            for (bar in bars) {
+                val sessionBreak = bucket.isNotEmpty() && (bar.timestampSec - bucket.last().timestampSec) >= 10_800L
+                if (sessionBreak || bucket.size >= groupSize) {
+                    result.add(
+                        OhlcvBar(
+                            timestampSec = bucket.first().timestampSec,
+                            open = bucket.first().open,
+                            high = bucket.maxOf { it.high },
+                            low = bucket.minOf { it.low },
+                            close = bucket.last().close,
+                            volume = bucket.sumOf { it.volume }
+                        )
+                    )
+                    bucket.clear()
+                }
+                bucket.add(bar)
+            }
+            if (bucket.isNotEmpty()) {
+                result.add(
+                    OhlcvBar(
+                        timestampSec = bucket.first().timestampSec,
+                        open = bucket.first().open,
+                        high = bucket.maxOf { it.high },
+                        low = bucket.minOf { it.low },
+                        close = bucket.last().close,
+                        volume = bucket.sumOf { it.volume }
+                    )
+                )
+            }
+            return result
         }
     }
 }

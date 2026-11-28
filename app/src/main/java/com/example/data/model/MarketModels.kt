@@ -1,21 +1,156 @@
 package com.example.data.model
 
+enum class TimeframeCategory(val label: String) {
+    ALL("All"),
+    SCALP("Scalp"),
+    INTRADAY("Intraday"),
+    SWING("Swing"),
+    MACRO("Position / Macro")
+}
+
 enum class ChartTimeframe(
     val label: String,
     val yahooRange: String,
     val yahooInterval: String,
-    val isIntraday: Boolean = false
+    val isIntraday: Boolean = false,
+    val category: TimeframeCategory = TimeframeCategory.SWING,
+    val useCase: String = "",
+    val aggregateGroupSize: Int = 1,
+    val refreshIntervalMs: Long = 20_000L
 ) {
-    MIN15("15m", "5d", "15m", isIntraday = true),
-    H1("1h", "1mo", "1h", isIntraday = true),
-    D1("1D", "1d", "5m", isIntraday = true),
-    W1("1W", "5d", "30m", isIntraday = true),
-    M1("1M", "1mo", "1d"),
-    M3("3M", "3mo", "1d"),
-    Y1("1Y", "1y", "1d"),
-    Y5("5Y", "5y", "1wk");
+    MIN1(
+        label = "1m",
+        yahooRange = "1d",
+        yahooInterval = "1m",
+        isIntraday = true,
+        category = TimeframeCategory.SCALP,
+        useCase = "Scalping & micro tick entries (1d live)",
+        refreshIntervalMs = 5_000L
+    ),
+    MIN5(
+        label = "5m",
+        yahooRange = "5d",
+        yahooInterval = "5m",
+        isIntraday = true,
+        category = TimeframeCategory.SCALP,
+        useCase = "Opening range & fast momentum (5d)",
+        refreshIntervalMs = 5_000L
+    ),
+    MIN15(
+        label = "15m",
+        yahooRange = "5d",
+        yahooInterval = "15m",
+        isIntraday = true,
+        category = TimeframeCategory.INTRADAY,
+        useCase = "Intraday trend & VWAP setups (5d)",
+        refreshIntervalMs = 8_000L
+    ),
+    MIN30(
+        label = "30m",
+        yahooRange = "1mo",
+        yahooInterval = "30m",
+        isIntraday = true,
+        category = TimeframeCategory.INTRADAY,
+        useCase = "Multi-session intraday structure (1m)",
+        refreshIntervalMs = 10_000L
+    ),
+    H1(
+        label = "1h",
+        yahooRange = "1mo",
+        yahooInterval = "60m",
+        isIntraday = true,
+        category = TimeframeCategory.INTRADAY,
+        useCase = "Intraday-to-swing transitions (1m)",
+        refreshIntervalMs = 12_000L
+    ),
+    H4(
+        label = "4h",
+        yahooRange = "3mo",
+        yahooInterval = "60m",
+        isIntraday = true,
+        category = TimeframeCategory.SWING,
+        useCase = "Clean multi-day swing structure (3m)",
+        aggregateGroupSize = 4,
+        refreshIntervalMs = 15_000L
+    ),
+    D1(
+        label = "1D",
+        yahooRange = "1d",
+        yahooInterval = "5m",
+        isIntraday = true,
+        category = TimeframeCategory.INTRADAY,
+        useCase = "Today's live session tape (5m feed)",
+        refreshIntervalMs = 5_000L
+    ),
+    W1(
+        label = "1W",
+        yahooRange = "5d",
+        yahooInterval = "30m",
+        isIntraday = true,
+        category = TimeframeCategory.SWING,
+        useCase = "This week's 30m price progression",
+        refreshIntervalMs = 15_000L
+    ),
+    M1(
+        label = "1M",
+        yahooRange = "1mo",
+        yahooInterval = "1d",
+        category = TimeframeCategory.SWING,
+        useCase = "1-month daily swing momentum",
+        refreshIntervalMs = 20_000L
+    ),
+    M3(
+        label = "3M",
+        yahooRange = "3mo",
+        yahooInterval = "1d",
+        category = TimeframeCategory.SWING,
+        useCase = "Quarterly technical & RL setups",
+        refreshIntervalMs = 20_000L
+    ),
+    M6(
+        label = "6M",
+        yahooRange = "6mo",
+        yahooInterval = "1d",
+        category = TimeframeCategory.MACRO,
+        useCase = "Half-year intermediate trend",
+        refreshIntervalMs = 30_000L
+    ),
+    YTD(
+        label = "YTD",
+        yahooRange = "ytd",
+        yahooInterval = "1d",
+        category = TimeframeCategory.MACRO,
+        useCase = "Year-to-date institutional benchmark",
+        refreshIntervalMs = 30_000L
+    ),
+    Y1(
+        label = "1Y",
+        yahooRange = "1y",
+        yahooInterval = "1d",
+        category = TimeframeCategory.MACRO,
+        useCase = "1-year primary trend & SMA200",
+        refreshIntervalMs = 30_000L
+    ),
+    Y5(
+        label = "5Y",
+        yahooRange = "5y",
+        yahooInterval = "1wk",
+        category = TimeframeCategory.MACRO,
+        useCase = "5-year weekly macro cycle",
+        refreshIntervalMs = 60_000L
+    ),
+    MAX(
+        label = "MAX",
+        yahooRange = "max",
+        yahooInterval = "1mo",
+        category = TimeframeCategory.MACRO,
+        useCase = "All-time secular market structure",
+        refreshIntervalMs = 60_000L
+    );
 
     companion object {
+        val ALL_LABELS: Set<String> = entries.map { it.label }.toSet()
+
         fun fromLabel(label: String): ChartTimeframe =
             entries.firstOrNull { it.label == label } ?: M3
     }
@@ -80,11 +215,12 @@ data class SymbolSearchResult(
     val type: String
 )
 
-enum class OscillatorType(val label: String) {
+enum class OscillatorType(val label: String, val isPremium: Boolean = false) {
     RSI("RSI (14)"),
     MACD("MACD (12,26,9)"),
     STOCHASTIC("Stochastic"),
-    MFI("MFI (14)")
+    MFI("MFI (14)"),
+    SQUEEZE_MOMENTUM("PRO: Squeeze", isPremium = true)
 }
 
 data class PivotLevels(
@@ -118,6 +254,39 @@ data class ChartTradeMarker(
     val isBuy: Boolean,
     val price: Double,
     val reason: String
+)
+
+enum class SmartMoneyZoneType(val tag: String) {
+    BULLISH_FVG("FVG+"),
+    BEARISH_FVG("FVG-"),
+    BULLISH_OB("OB+"),
+    BEARISH_OB("OB-")
+}
+
+data class SmartMoneyZone(
+    val startBarIndex: Int,
+    val endBarIndex: Int,
+    val lowPrice: Double,
+    val highPrice: Double,
+    val isBullish: Boolean,
+    val type: SmartMoneyZoneType
+)
+
+data class VolumeProfileBin(
+    val lowPrice: Double,
+    val highPrice: Double,
+    val bullVolume: Double,
+    val bearVolume: Double
+) {
+    val totalVolume: Double get() = bullVolume + bearVolume
+}
+
+data class VolumeProfileResult(
+    val bins: List<VolumeProfileBin>,
+    val pocPrice: Double,
+    val vahPrice: Double,
+    val valPrice: Double,
+    val maxBucketVolume: Double
 )
 
 data class TechnicalAnalysisResult(
@@ -167,6 +336,13 @@ data class TechnicalAnalysisResult(
     val stochKSeries: List<Double?>,
     val stochDSeries: List<Double?>,
     val mfiSeries: List<Double?>,
+    val ichimokuTenkanSeries: List<Double?> = emptyList(),
+    val ichimokuKijunSeries: List<Double?> = emptyList(),
+    val ichimokuSenkouASeries: List<Double?> = emptyList(),
+    val ichimokuSenkouBSeries: List<Double?> = emptyList(),
+    val squeezeMomentumSeries: List<Double?> = emptyList(),
+    val squeezeOnSeries: List<Boolean?> = emptyList(),
+    val smartMoneyZones: List<SmartMoneyZone> = emptyList(),
     val tradeMarkers: List<ChartTradeMarker>,
     val entryZoneLow: Double,
     val entryZoneHigh: Double,
@@ -198,6 +374,27 @@ data class RlPolicyResult(
     val rationale: String
 )
 
+enum class PredictionDirectionVote(val label: String) {
+    BULLISH("BULLISH"),
+    NEUTRAL("NEUTRAL"),
+    BEARISH("BEARISH")
+}
+
+data class AiAgentPrediction(
+    val agentId: String,
+    val agentName: String,
+    val specialty: String,
+    val direction: PredictionDirectionVote,
+    val upProbabilityPct: Int,
+    val confidencePercent: Int,
+    val targetLow: Double,
+    val targetBase: Double,
+    val targetHigh: Double,
+    val keySignal: String,
+    val horizonNote: String,
+    val weight: Double
+)
+
 data class AiForecastResult(
     val symbol: String,
     val shortTermBias: String,
@@ -213,6 +410,15 @@ data class AiForecastResult(
     val keyRiskFactors: List<String>,
     val entryExitGuidance: String,
     val riskManagementAdvice: String,
+    val agentPredictions: List<AiAgentPrediction> = emptyList(),
+    val consensusVerdict: String = "",
+    val agreementPercent: Int = 0,
+    val bullishVotes: Int = 0,
+    val neutralVotes: Int = 0,
+    val bearishVotes: Int = 0,
+    val ensembleSpreadPct: Double = 0.0,
+    val comparisonSummary: String = "",
+    val recommendedAction: String = "",
     val generatedAtMs: Long = System.currentTimeMillis()
 )
 

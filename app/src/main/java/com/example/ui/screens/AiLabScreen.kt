@@ -45,7 +45,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.model.AiForecastResult
 import com.example.data.model.PositionStatus
 import com.example.data.model.RlPolicyResult
 import com.example.data.model.UiState
@@ -55,9 +54,9 @@ import com.example.ui.components.ErrorCard
 import com.example.ui.components.InteractivePositionCalculatorCard
 import com.example.ui.components.KeyLevelsAndPivotsCard
 import com.example.ui.components.LoadingCard
+import com.example.ui.components.MultiAiEnsembleCard
 import com.example.ui.components.RlActionBadge
 import com.example.ui.components.RlEquityCurveChart
-import com.example.ui.components.SentimentBar
 import com.example.ui.theme.AiCyan
 import com.example.ui.theme.AiCyanDim
 import com.example.ui.theme.BearCoral
@@ -232,11 +231,11 @@ fun AiLabScreen(
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.size(10.dp))
-                                Text("Generating Predictive Forecast...", fontWeight = FontWeight.Bold)
+                                Text("Comparing Multiple AIs...", fontWeight = FontWeight.Bold)
                             } else {
                                 Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.size(8.dp))
-                                Text("Run AI Predictive Forecast", fontWeight = FontWeight.Bold)
+                                Text("Run Multi-AI Ensemble Prediction", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -246,7 +245,11 @@ fun AiLabScreen(
                             ErrorCard(fState.message, onRetry = { viewModel.runAiForecast() })
                         }
                         is UiState.Success -> item {
-                            AiForecastCard(forecast = fState.data, currencySymbol = currency)
+                            MultiAiEnsembleCard(
+                                forecast = fState.data,
+                                currencySymbol = currency,
+                                currentPrice = q.price
+                            )
                         }
                         else -> Unit
                     }
@@ -463,94 +466,6 @@ private fun RlDecisionCard(rl: RlPolicyResult) {
                     if (rl.sharpeRatio >= 1.0) BullEmerald else RiskAmber,
                     Modifier.weight(1f)
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AiForecastCard(forecast: AiForecastResult, currencySymbol: String) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = TerminalSurface),
-        border = BorderStroke(1.dp, AiCyan.copy(alpha = 0.45f)),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "${forecast.symbol} Predictive Price Action",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = AiCyan
-                )
-                Text(
-                    text = "${forecast.confidencePercent}% Confidence",
-                    style = MonoNumericSmall,
-                    color = BullEmerald
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                MetricTile("SHORT-TERM", forecast.shortTermBias, AiCyan, Modifier.weight(1f))
-                MetricTile("MEDIUM-TERM", forecast.mediumTermBias, BullEmerald, Modifier.weight(1f))
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                MetricTile("BEAR TARGET", "$currencySymbol${fmtMoney(forecast.projectedTargetLow)}", BearCoral, Modifier.weight(1f))
-                MetricTile("BASE TARGET", "$currencySymbol${fmtMoney(forecast.projectedTargetBase)}", AiCyan, Modifier.weight(1f))
-                MetricTile("BULL TARGET", "$currencySymbol${fmtMoney(forecast.projectedTargetHigh)}", BullEmerald, Modifier.weight(1f))
-            }
-
-            SentimentBar(score = forecast.sentimentScore, label = forecast.sentimentLabel)
-
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Long-Term Thesis", style = MaterialTheme.typography.titleSmall)
-                Text(forecast.longTermThesis, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
-            }
-
-            if (forecast.keyCatalysts.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Key Catalysts", style = MaterialTheme.typography.titleSmall, color = BullEmerald)
-                    forecast.keyCatalysts.forEach { c ->
-                        Text("• $c", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                    }
-                }
-            }
-
-            if (forecast.keyRiskFactors.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Risk & Invalidation Factors", style = MaterialTheme.typography.titleSmall, color = BearCoral)
-                    forecast.keyRiskFactors.forEach { r ->
-                        Text("• $r", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                    }
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(TerminalSurfaceElevated)
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text("Entry / Exit Guidance", style = MaterialTheme.typography.titleSmall, color = AiCyan)
-                Text(forecast.entryExitGuidance, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                Text("Risk Management", style = MaterialTheme.typography.titleSmall, color = RiskAmber)
-                Text(forecast.riskManagementAdvice, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
             }
         }
     }

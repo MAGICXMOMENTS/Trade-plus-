@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class TradePulseViewModel(
@@ -115,8 +116,16 @@ class TradePulseViewModel(
     private val _feedbackMessage = MutableStateFlow<String?>(null)
     val feedbackMessage: StateFlow<String?> = _feedbackMessage.asStateFlow()
 
+    private val _isLiveChartEnabled = MutableStateFlow(true)
+    val isLiveChartEnabled: StateFlow<Boolean> = _isLiveChartEnabled.asStateFlow()
+
+    private val _lastChartUpdatedMs = MutableStateFlow(0L)
+    val lastChartUpdatedMs: StateFlow<Long> = _lastChartUpdatedMs.asStateFlow()
+
     private var searchJob: Job? = null
     private var intelligenceJob: Job? = null
+    private var liveStreamJob: Job? = null
+    private var liveStreamDesired = false
     private var forecastJob: Job? = null
     private var auditJob: Job? = null
 
@@ -224,11 +233,64 @@ class TradePulseViewModel(
             _aiForecastState.value = UiState.Idle
         }
         loadStockIntelligence(clean, resolvedExchange, timeframe)
+        if (liveStreamDesired && _isLiveChartEnabled.value) {
+            startLiveChartStream()
+        }
     }
 
     fun selectTimeframe(timeframe: ChartTimeframe) {
         _selectedTimeframe.value = timeframe
         loadStockIntelligence(_selectedSymbol.value, _selectedExchange.value, timeframe)
+        if (liveStreamDesired && _isLiveChartEnabled.value) {
+            startLiveChartStream()
+        }
+    }
+
+    fun toggleLiveChart() {
+        val next = !_isLiveChartEnabled.value
+        _isLiveChartEnabled.value = next
+        if (next && liveStreamDesired) {
+            startLiveChartStream()
+        } else {
+            liveStreamJob?.cancel()
+        }
+    }
+
+    fun startLiveChartStream() {
+        liveStreamDesired = true
+        if (!_isLiveChartEnabled.value) return
+        liveStreamJob?.cancel()
+        liveStreamJob = viewModelScope.launch {
+            while (isActive && liveStreamDesired && _isLiveChartEnabled.value) {
+                val tf = _selectedTimeframe.value
+                delay(tf.refreshIntervalMs)
+                if (!isActive || !liveStreamDesired || !_isLiveChartEnabled.value) break
+                val sym = _selectedSymbol.value
+                val ex = _selectedExchange.value
+                if (_stockIntelligenceState.value is UiState.Success) {
+                    try {
+                        val bundle = marketRepo.loadStockIntelligence(sym, ex, tf, forceRefresh = true)
+                        if (sym == _selectedSymbol.value && tf == _selectedTimeframe.value) {
+                            _stockIntelligenceState.value = UiState.Success(bundle)
+                            _lastChartUpdatedMs.value = System.currentTimeMillis()
+                            _liveQuoteMap.value = _liveQuoteMap.value.toMutableMap().apply {
+                                put(bundle.quote.symbol.uppercase(), bundle.quote)
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Silent live chart tick failed for $sym: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    fun stopLiveChartStream() {
+        liveStreamDesired = false
+        liveStreamJob?.cancel()
+        liveStreamJob = null
     }
 
     fun loadStockIntelligence(
@@ -239,13 +301,16 @@ class TradePulseViewModel(
     ) {
         intelligenceJob?.cancel()
         intelligenceJob = viewModelScope.launch {
-            _stockIntelligenceState.value = UiState.Loading
+            if (_stockIntelligenceState.value !is UiState.Success || !forceRefresh) {
+                _stockIntelligenceState.value = UiState.Loading
+            }
             try {
                 val bundle = marketRepo.loadStockIntelligence(symbol, exchange, timeframe, forceRefresh)
                 if (_selectedExchange.value.isBlank() && bundle.quote.exchange.isNotBlank()) {
                     _selectedExchange.value = bundle.quote.exchange
                 }
                 _stockIntelligenceState.value = UiState.Success(bundle)
+                _lastChartUpdatedMs.value = System.currentTimeMillis()
                 _liveQuoteMap.value = _liveQuoteMap.value.toMutableMap().apply {
                     put(bundle.quote.symbol.uppercase(), bundle.quote)
                 }
@@ -253,9 +318,13 @@ class TradePulseViewModel(
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load intelligence for $symbol", e)
-                _stockIntelligenceState.value = UiState.Error(
-                    e.localizedMessage ?: "Unable to fetch historical data for $symbol."
-                )
+                if (_stockIntelligenceState.value !is UiState.Success || !forceRefresh) {
+                    _stockIntelligenceState.value = UiState.Error(
+                        e.localizedMessage ?: "Unable to fetch historical data for $symbol."
+                    )
+                } else {
+                    _feedbackMessage.value = e.localizedMessage ?: "Live chart refresh failed"
+                }
             }
         }
     }
@@ -274,7 +343,8 @@ class TradePulseViewModel(
                     quote = intel.quote,
                     technicals = intel.technicals,
                     rlPolicy = intel.rlPolicy,
-                    riskProfile = riskProfileState.value
+                    riskProfile = riskProfileState.value,
+                    quantPrediction = intel.prediction
                 )
                 _aiForecastState.value = UiState.Success(forecast)
             } catch (e: TimeoutCancellationException) {

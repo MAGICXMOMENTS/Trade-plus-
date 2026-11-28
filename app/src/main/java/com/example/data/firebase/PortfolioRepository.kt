@@ -421,8 +421,8 @@ class PortfolioRepository(
             require(accountCapital in 100.0..1_000_000_000.0) { "Account capital must be >= $100" }
             require(defaultRiskPerTradePct in 0.1..25.0) { "Risk per trade must be 0.1% - 25%" }
             require(maxPortfolioDrawdownPct in 1.0..80.0) { "Max drawdown must be 1% - 80%" }
-            require(preferredTimeframe in setOf("15m", "1h", "1D", "1W", "1M", "3M", "1Y", "5Y")) {
-                "Preferred timeframe must be 15m, 1h, 1D, 1W, 1M, 3M, 1Y, or 5Y"
+            require(preferredTimeframe in com.example.data.model.ChartTimeframe.ALL_LABELS) {
+                "Unsupported preferred timeframe: $preferredTimeframe"
             }
 
             val docRef = db.collection("users").document(uid).collection("profile").document("settings")
